@@ -27,7 +27,7 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 **Goal:** make the existing backend reproducible and safe to change.
 
 - [x] Provide local Docker Compose for PostgreSQL and the API.
-- [ ] Add a documented migration command and an ephemeral PostgreSQL migration smoke test.
+- [x] Add a documented migration command and an ephemeral PostgreSQL migration smoke test.
 - [ ] Add CI for formatting, linting, tests, build, and migration validation.
 - [ ] Add an API error/response contract document or OpenAPI specification.
 - [ ] Add rate limiting for registration, login, order-hold, and payment routes.

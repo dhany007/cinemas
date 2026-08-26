@@ -29,6 +29,20 @@ The API is available at `http://127.0.0.1:18081/healthz` and PostgreSQL is avail
 
 The Compose database credentials and authentication secrets are local-development values only. Never reuse them in staging or production. To stop the stack while preserving local data, run `docker compose down`. `docker compose down -v` also deletes the local database volume.
 
+Apply pending migrations to the already-running local database with:
+
+```text
+docker compose run --rm migrate
+```
+
+Run the isolated migration smoke test with:
+
+```text
+./scripts/test-migrations.sh
+```
+
+The smoke test starts a separate PostgreSQL container without publishing a host port, verifies every migration, and removes only its own temporary volume when it finishes.
+
 ## Implemented API
 
 `GET /v1/movies` returns public movie metadata in deterministic newest-first order. It accepts an optional `limit` from `1` to `100` (default `20`) and an opaque `cursor`; pass `next_cursor` from one response as the next request's `cursor` value. A malformed limit or cursor returns `400 INVALID_REQUEST`.
