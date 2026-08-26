@@ -57,7 +57,7 @@ The versioned API contract is [openapi/openapi.yaml](openapi/openapi.yaml). Upda
 
 `POST /v1/auth/bootstrap-admin` creates the one initial `ADMIN` account. It accepts the same registration body and requires the `X-Admin-Bootstrap-Token` header to match `AUTH_ADMIN_BOOTSTRAP_TOKEN`. Do not expose this environment secret to browser clients. The endpoint returns `401` when the token is absent or invalid and `409 ADMIN_ALREADY_BOOTSTRAPPED` after the first admin exists.
 
-`POST /v1/orders/{orderId}/payment-intents` requires the customer's bearer token. It uses the local `FAKE` provider during development, synchronously returns `SUCCEEDED`, atomically marks the caller's eligible order paid, changes its held seats to `SOLD`, and issues tickets. It is a development-only provider and must be replaced by a signed asynchronous gateway webhook before production.
+`POST /v1/orders/{orderId}/payment-intents` requires the customer's bearer token and creates a `PENDING` intent. It never marks an order paid. In local development, the deterministic `FAKE` adapter is enabled with `PAYMENT_PROVIDER=FAKE`; it is rejected when `APP_ENV=production`. A signed `POST /v1/webhooks/payments/FAKE` event is the only path that can mark the order paid, sell seats, issue tickets, and record the payment audit event. The webhook requires `X-Payment-Timestamp` and HMAC-SHA256 `X-Payment-Signature` over `<timestamp>.<raw-body>`, using `PAYMENT_WEBHOOK_SECRET`; events outside `PAYMENT_WEBHOOK_REPLAY_WINDOW` are rejected.
 
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires `Authorization: Bearer <access_token>`, an `Idempotency-Key` header, and a JSON body:
 
@@ -68,7 +68,7 @@ The versioned API contract is [openapi/openapi.yaml](openapi/openapi.yaml). Upda
 }
 ```
 
-The order owner always comes from the validated access token. A `user_id` in the JSON body is ignored and cannot be used to place an order for another account. Customers may only pay their own orders; unknown and non-owned orders both return `404 ORDER_NOT_FOUND`.
+The order owner always comes from the validated access token. A `user_id` in the JSON body is ignored and cannot be used to place an order for another account. Customers may only create an intent for their own order; unknown and non-owned orders both return `404 ORDER_NOT_FOUND`. Provider events are stored idempotently by `(provider, provider_event_id)`. A successful payment received after hold expiry is retained as `REFUND_PENDING`, releases no sold inventory, and produces a `PAYMENT_REFUND_PENDING` audit event for manual review/refund processing.
 
 Authentication errors use the standard error envelope: missing or invalid access tokens return `401 UNAUTHENTICATED`, invalid login details return `401 INVALID_CREDENTIALS`, and an authenticated principal without the required role returns `403 FORBIDDEN`.
 

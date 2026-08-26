@@ -31,3 +31,23 @@ func TestLoadAuthenticationConfigRejectsShortJWTSecret(t *testing.T) {
 		t.Fatal("loadAuthenticationConfig() error = nil, want short secret error")
 	}
 }
+
+func TestLoadPaymentConfigAllowsFakeOnlyOutsideProduction(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAYMENT_PROVIDER", "FAKE")
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "payment-webhook-secret-must-be-at-least-32")
+	t.Setenv("PAYMENT_WEBHOOK_REPLAY_WINDOW", "10m")
+
+	configuration, err := loadPaymentConfig()
+	if err != nil {
+		t.Fatalf("loadPaymentConfig() error = %v", err)
+	}
+	if configuration.provider != "FAKE" || configuration.replayWindow != 10*time.Minute {
+		t.Fatalf("payment config = %#v, want fake provider with 10 minute replay window", configuration)
+	}
+
+	t.Setenv("APP_ENV", "production")
+	if _, err := loadPaymentConfig(); err == nil {
+		t.Fatal("loadPaymentConfig() error = nil, want fake provider rejected in production")
+	}
+}

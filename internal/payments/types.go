@@ -3,42 +3,51 @@ package payments
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 )
 
 const (
-	// FakeProvider identifies the local deterministic payment provider.
-	FakeProvider = "FAKE"
+	// FakeProviderName identifies the deterministic local-only payment adapter.
+	FakeProviderName = "FAKE"
 )
 
 var (
-	// ErrOrderNotFound indicates that the requested order does not exist.
-	ErrOrderNotFound = errors.New("order not found")
-	// ErrOrderNotPayable indicates that an order cannot transition to paid.
-	ErrOrderNotPayable = errors.New("order is not payable")
-	// ErrOrderExpired indicates that the payment arrived after its seat hold expired.
-	ErrOrderExpired = errors.New("order hold expired")
+	ErrOrderNotFound           = errors.New("order not found")
+	ErrOrderNotPayable         = errors.New("order is not payable")
+	ErrOrderExpired            = errors.New("order hold expired")
+	ErrInvalidWebhookSignature = errors.New("invalid webhook signature")
+	ErrWebhookExpired          = errors.New("webhook timestamp is outside replay window")
+	ErrPaymentNotFound         = errors.New("payment not found")
 )
 
-// OrderStatus describes the payment-relevant order lifecycle.
 type OrderStatus string
 
 const (
-	// OrderPendingPayment means an order may still be paid before expiry.
 	OrderPendingPayment OrderStatus = "PENDING_PAYMENT"
-	// OrderPaid means payment has completed and tickets were issued.
-	OrderPaid OrderStatus = "PAID"
+	OrderPaid           OrderStatus = "PAID"
+	OrderExpired        OrderStatus = "EXPIRED"
+	OrderCancelled      OrderStatus = "CANCELLED"
 )
 
-// PaymentStatus describes the final fake-payment state.
 type PaymentStatus string
 
 const (
-	// PaymentSucceeded means the fake provider accepted the payment.
-	PaymentSucceeded PaymentStatus = "SUCCEEDED"
+	PaymentPending       PaymentStatus = "PENDING"
+	PaymentSucceeded     PaymentStatus = "SUCCEEDED"
+	PaymentFailed        PaymentStatus = "FAILED"
+	PaymentExpired       PaymentStatus = "EXPIRED"
+	PaymentRefundPending PaymentStatus = "REFUND_PENDING"
 )
 
-// OrderItem is the priced ticket item in an order.
+type WebhookEventStatus string
+
+const (
+	WebhookPaymentSucceeded WebhookEventStatus = "SUCCEEDED"
+	WebhookPaymentFailed    WebhookEventStatus = "FAILED"
+	WebhookPaymentExpired   WebhookEventStatus = "EXPIRED"
+)
+
 type OrderItem struct {
 	ID          string
 	SeatID      string
@@ -46,13 +55,11 @@ type OrderItem struct {
 	Currency    string
 }
 
-// Ticket is an issued ticket for a paid order item.
 type Ticket struct {
 	OrderItemID string
 	Code        string
 }
 
-// Order is the payment-relevant representation of a booking order.
 type Order struct {
 	ID        string
 	UserID    string
@@ -62,17 +69,58 @@ type Order struct {
 	Tickets   []Ticket
 }
 
-// Payment is a completed fake-provider payment.
+// PaymentIntentRequest is sent to an external payment adapter. IdempotencyKey
+// is stable for the order and must be forwarded to the provider unchanged.
+type PaymentIntentRequest struct {
+	OrderID        string
+	Amount         string
+	Currency       string
+	IdempotencyKey string
+}
+
+type PaymentIntent struct {
+	Provider  string
+	Reference string
+	Status    PaymentStatus
+	Amount    string
+	Currency  string
+}
+
 type Payment struct {
 	Provider  string
 	Reference string
 	Status    PaymentStatus
 	Amount    string
 	Currency  string
-	PaidAt    time.Time
+	PaidAt    *time.Time
 }
 
-// Repository atomically applies the fake-payment completion transition.
+// WebhookRequest retains the raw signed body. The signature verifier must run
+// before decoding or trusting any field in Body.
+type WebhookRequest struct {
+	Header http.Header
+	Body   []byte
+}
+
+type WebhookEvent struct {
+	Provider          string
+	ProviderEventID   string
+	ProviderReference string
+	Status            WebhookEventStatus
+	OccurredAt        time.Time
+}
+
+// Provider isolates provider-specific HTTP/API and webhook protocols.
+type Provider interface {
+	Name() string
+	CreatePaymentIntent(context.Context, PaymentIntentRequest) (PaymentIntent, error)
+	VerifyWebhook(WebhookRequest, time.Time) (WebhookEvent, error)
+}
+
+// Repository persists payment intents and atomically processes verified events.
+// Provider calls deliberately happen outside repository transactions.
 type Repository interface {
-	CompleteFakePayment(ctx context.Context, orderID, userID string, now time.Time) (Payment, error)
+	PaymentIntentRequest(ctx context.Context, orderID, userID string, now time.Time) (PaymentIntentRequest, *PaymentIntent, error)
+	SavePaymentIntent(ctx context.Context, intent PaymentIntent, orderID string, now time.Time) (PaymentIntent, error)
+	ProcessWebhookEvent(ctx context.Context, event WebhookEvent, now time.Time) error
 }

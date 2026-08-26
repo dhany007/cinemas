@@ -1280,7 +1280,7 @@ func TestServerListMovieShowtimesReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestServerCreateFakePayment(t *testing.T) {
+func TestServerCreatesPendingIntentAndAcceptsVerifiedWebhook(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
 	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, func() time.Time { return now })
 	authenticationService := auth.NewService(
@@ -1297,7 +1297,7 @@ func TestServerCreateFakePayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	paymentService := payments.NewService(payments.NewMemoryRepository([]payments.Order{{
+	paymentRepository := payments.NewMemoryRepository([]payments.Order{{
 		ID:        "10000000-0000-4000-8000-000000000001",
 		UserID:    session.User.ID,
 		Status:    payments.OrderPendingPayment,
@@ -1308,7 +1308,9 @@ func TestServerCreateFakePayment(t *testing.T) {
 			PriceAmount: "50000.00",
 			Currency:    "IDR",
 		}},
-	}}), func() time.Time { return now })
+	}})
+	provider := payments.NewFakeProvider("test-webhook-secret-must-be-at-least-32-bytes", 5*time.Minute)
+	paymentService := payments.NewService(paymentRepository, provider, func() time.Time { return now })
 	server := NewServerWithAllFeatures(
 		bookingService,
 		nil,
@@ -1331,7 +1333,25 @@ func TestServerCreateFakePayment(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
-	if want := `"status":"SUCCEEDED"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+	if want := `"status":"PENDING"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
 		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+	if order, ok := paymentRepository.Order("10000000-0000-4000-8000-000000000001"); !ok || order.Status != payments.OrderPendingPayment {
+		t.Fatalf("order after intent = %#v, want pending", order)
+	}
+
+	payload := provider.SuccessPayload("evt-http-payment-1", "fake-10000000-0000-4000-8000-000000000001", now)
+	webhook := httptest.NewRequest(http.MethodPost, "/v1/webhooks/payments/FAKE", bytes.NewReader(payload))
+	webhook.Header.Set("X-Payment-Timestamp", now.Format(time.RFC3339))
+	webhook.Header.Set("X-Payment-Signature", provider.Sign(payload, now))
+	webhookRecorder := httptest.NewRecorder()
+
+	server.ServeHTTP(webhookRecorder, webhook)
+
+	if webhookRecorder.Code != http.StatusNoContent {
+		t.Fatalf("webhook status = %d, want %d; body = %s", webhookRecorder.Code, http.StatusNoContent, webhookRecorder.Body.String())
+	}
+	if order, ok := paymentRepository.Order("10000000-0000-4000-8000-000000000001"); !ok || order.Status != payments.OrderPaid {
+		t.Fatalf("order after webhook = %#v, want paid", order)
 	}
 }

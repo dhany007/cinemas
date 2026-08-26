@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/subtle"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -130,11 +131,12 @@ func newServer(
 		e.POST("/v1/orders/:orderID/cancel", server.requireRole(authenticationService, auth.RoleCustomer, server.cancelOrder(bookingService)))
 	}
 	if paymentService != nil {
-		paymentHandler := server.createFakePayment(paymentService)
+		paymentHandler := server.createPaymentIntent(paymentService)
 		if authenticationService != nil {
 			paymentHandler = server.requireRole(authenticationService, auth.RoleCustomer, paymentHandler)
 		}
 		e.POST("/v1/orders/:orderID/payment-intents", server.rateLimit(paymentHandler))
+		e.POST("/v1/webhooks/payments/:provider", server.rateLimit(server.processPaymentWebhook(paymentService)))
 	}
 	if seatMapService != nil {
 		e.GET("/v1/showtimes/:showtimeID/seats", server.getShowtimeSeats(seatMapService))
@@ -369,7 +371,6 @@ type paymentResponse struct {
 	Status    string `json:"status"`
 	Amount    string `json:"amount"`
 	Currency  string `json:"currency"`
-	PaidAt    string `json:"paid_at"`
 }
 
 type authRequest struct {
@@ -1129,7 +1130,7 @@ func writeShowtimeError(c echo.Context, err error, operation string) error {
 	}
 }
 
-func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
+func (s *Server) createPaymentIntent(service *payments.Service) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		orderID := c.Param("orderID")
 		if !isUUID(orderID) {
@@ -1141,7 +1142,7 @@ func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
 			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
 		}
 
-		payment, err := service.CreateFakePayment(c.Request().Context(), orderID, identity.UserID)
+		intent, err := service.CreatePaymentIntent(c.Request().Context(), orderID, identity.UserID)
 		if err != nil {
 			switch {
 			case errors.Is(err, payments.ErrOrderNotFound):
@@ -1149,18 +1150,38 @@ func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
 			case errors.Is(err, payments.ErrOrderNotPayable), errors.Is(err, payments.ErrOrderExpired):
 				return writeError(c, http.StatusConflict, "ORDER_NOT_PAYABLE", "order can no longer be paid")
 			default:
-				return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to complete payment")
+				return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to create payment intent")
 			}
 		}
 
 		return c.JSON(http.StatusCreated, paymentResponse{
-			Provider:  payment.Provider,
-			Reference: payment.Reference,
-			Status:    string(payment.Status),
-			Amount:    payment.Amount,
-			Currency:  payment.Currency,
-			PaidAt:    payment.PaidAt.Format(time.RFC3339),
+			Provider:  intent.Provider,
+			Reference: intent.Reference,
+			Status:    string(intent.Status),
+			Amount:    intent.Amount,
+			Currency:  intent.Currency,
 		})
+	}
+}
+
+func (s *Server) processPaymentWebhook(service *payments.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if c.Param("provider") != service.ProviderName() {
+			return writeError(c, http.StatusNotFound, "PAYMENT_PROVIDER_NOT_FOUND", "payment provider was not found")
+		}
+		body, err := io.ReadAll(io.LimitReader(c.Request().Body, 64<<10))
+		if err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "webhook body could not be read")
+		}
+		if err := service.ProcessWebhook(c.Request().Context(), payments.WebhookRequest{Header: c.Request().Header, Body: body}); err != nil {
+			switch {
+			case errors.Is(err, payments.ErrInvalidWebhookSignature), errors.Is(err, payments.ErrWebhookExpired):
+				return writeError(c, http.StatusUnauthorized, "INVALID_WEBHOOK", "webhook signature is invalid")
+			default:
+				return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to process payment webhook")
+			}
+		}
+		return c.NoContent(http.StatusNoContent)
 	}
 }
 

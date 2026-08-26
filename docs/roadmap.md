@@ -65,16 +65,16 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 ## Stage 4 — Production Payment Integration
 
-**Goal:** replace the local fake provider with a real, asynchronous, recoverable payment flow.
+**Goal:** establish an asynchronous, recoverable payment flow behind a swappable provider adapter.
 
-- [ ] Define the payment provider adapter interface and provider configuration.
-- [ ] Create real payment intents using an idempotency key.
-- [ ] Add signed webhook verification and replay-window validation.
-- [ ] Deduplicate provider events in `payment_webhook_events`.
-- [ ] Finalize paid orders, seats, tickets, and audit events atomically.
-- [ ] Handle failed, expired, late, duplicated, and out-of-order payment events.
-- [ ] Define refund and manual-review rules for a payment received after hold expiry.
-- [ ] Retain the fake provider only for local development and tests.
+- [x] Define the payment provider adapter interface and provider configuration.
+- [x] Create provider payment intents using an idempotency key.
+- [x] Add signed webhook verification and replay-window validation.
+- [x] Deduplicate provider events in `payment_webhook_events`.
+- [x] Finalize paid orders, seats, tickets, and audit events atomically.
+- [x] Handle failed, expired, late, duplicated, and out-of-order payment events.
+- [x] Define refund and manual-review rules for a payment received after hold expiry.
+- [x] Retain the fake provider only for local development and tests.
 
 **Done when:** the provider webhook—not a browser redirect—is the only authority that changes an order to paid, and every payment event is idempotent.
 

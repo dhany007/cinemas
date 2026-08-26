@@ -385,21 +385,55 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
   /v1/orders/{orderID}/payment-intents:
     post:
-      summary: Complete an authenticated customer's order with the local fake provider
-      description: Development-only endpoint; a production provider must use a verified asynchronous webhook.
+      summary: Create an authenticated customer's pending payment intent
+      description: The response never changes order state to paid; only a verified provider webhook may do so.
       security: [{bearerAuth: []}]
       parameters: [{$ref: '#/components/parameters/OrderID'}]
       responses:
         '201':
-          description: Payment completed and tickets issued
+          description: Pending payment intent created or returned idempotently
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/Payment'}
+              schema: {$ref: '#/components/schemas/PaymentIntent'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/OrderNotFound'}
         '409': {$ref: '#/components/responses/OrderNotPayable'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/webhooks/payments/{provider}:
+    post:
+      summary: Process a signed payment-provider webhook
+      description: Provider-only endpoint. Events are signature-verified, replay-window validated, and deduplicated before any order state changes.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: {type: string, enum: [FAKE]}
+        - name: X-Payment-Timestamp
+          in: header
+          required: true
+          schema: {type: string, format: date-time}
+        - name: X-Payment-Signature
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type, reference, occurred_at]
+              properties:
+                id: {type: string}
+                type: {type: string, enum: [payment.succeeded, payment.failed, payment.expired]}
+                reference: {type: string}
+                occurred_at: {type: string, format: date-time}
+      responses:
+        '204': {description: Event accepted or already processed}
+        '401': {description: Invalid signature or expired replay window, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: Provider not configured, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '429': {$ref: '#/components/responses/RateLimited'}
 components:
   securitySchemes:
@@ -641,13 +675,12 @@ components:
         status: {type: string, enum: [PENDING_PAYMENT]}
         expires_at: {type: string, format: date-time}
         seat_ids: {type: array, items: {$ref: '#/components/schemas/UUID'}}
-    Payment:
+    PaymentIntent:
       type: object
-      required: [provider, reference, status, amount, currency, paid_at]
+      required: [provider, reference, status, amount, currency]
       properties:
         provider: {type: string, enum: [FAKE]}
         reference: {type: string}
-        status: {type: string, enum: [SUCCEEDED]}
+        status: {type: string, enum: [PENDING, SUCCEEDED, FAILED, EXPIRED, REFUND_PENDING]}
         amount: {type: string}
         currency: {type: string}
-        paid_at: {type: string, format: date-time}

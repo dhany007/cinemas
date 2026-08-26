@@ -23,20 +23,28 @@ import (
 )
 
 const (
-	databasePingTimeout   = 5 * time.Second
-	defaultHoldDuration   = 10 * time.Minute
-	readHeaderTimeout     = 5 * time.Second
-	shutdownTimeout       = 10 * time.Second
-	defaultAccessTokenTTL = time.Hour
-	minimumJWTSecretBytes = 32
-	holdExpiryInterval    = 30 * time.Second
-	holdExpiryBatchSize   = 100
+	databasePingTimeout        = 5 * time.Second
+	defaultHoldDuration        = 10 * time.Minute
+	readHeaderTimeout          = 5 * time.Second
+	shutdownTimeout            = 10 * time.Second
+	defaultAccessTokenTTL      = time.Hour
+	minimumJWTSecretBytes      = 32
+	minimumWebhookSecretBytes  = 32
+	holdExpiryInterval         = 30 * time.Second
+	holdExpiryBatchSize        = 100
+	defaultWebhookReplayWindow = 5 * time.Minute
 )
 
 type authenticationConfig struct {
 	jwtSecret           []byte
 	accessTokenTTL      time.Duration
 	adminBootstrapToken string
+}
+
+type paymentConfig struct {
+	provider      string
+	webhookSecret string
+	replayWindow  time.Duration
 }
 
 func main() {
@@ -50,6 +58,11 @@ func main() {
 	authenticationConfig, err := loadAuthenticationConfig()
 	if err != nil {
 		logger.Error("load authentication configuration", "error", err)
+		os.Exit(1)
+	}
+	paymentConfig, err := loadPaymentConfig()
+	if err != nil {
+		logger.Error("load payment configuration", "error", err)
 		os.Exit(1)
 	}
 
@@ -75,7 +88,11 @@ func main() {
 	seatMapService := seatinventory.NewService(postgres.NewSeatMapRepository(pool))
 	movieCatalogService := catalog.NewService(postgres.NewMoviesRepository(pool))
 	showtimeService := scheduling.NewService(postgres.NewShowtimesRepository(pool))
-	paymentService := payments.NewService(postgres.NewPaymentsRepository(pool), time.Now)
+	paymentService := payments.NewService(
+		postgres.NewPaymentsRepository(pool),
+		payments.NewFakeProvider(paymentConfig.webhookSecret, paymentConfig.replayWindow),
+		time.Now,
+	)
 	authenticationService := auth.NewService(
 		postgres.NewAuthRepository(pool),
 		authenticationConfig.jwtSecret,
@@ -167,6 +184,29 @@ func loadAuthenticationConfig() (authenticationConfig, error) {
 		accessTokenTTL:      accessTokenTTL,
 		adminBootstrapToken: os.Getenv("AUTH_ADMIN_BOOTSTRAP_TOKEN"),
 	}, nil
+}
+
+func loadPaymentConfig() (paymentConfig, error) {
+	provider := environmentOr("PAYMENT_PROVIDER", payments.FakeProviderName)
+	if provider != payments.FakeProviderName {
+		return paymentConfig{}, errors.New("PAYMENT_PROVIDER is not configured")
+	}
+	if environmentOr("APP_ENV", "development") == "production" {
+		return paymentConfig{}, errors.New("PAYMENT_PROVIDER=FAKE is not allowed in production")
+	}
+	webhookSecret := os.Getenv("PAYMENT_WEBHOOK_SECRET")
+	if len(webhookSecret) < minimumWebhookSecretBytes {
+		return paymentConfig{}, errors.New("PAYMENT_WEBHOOK_SECRET must be at least 32 bytes")
+	}
+	replayWindow := defaultWebhookReplayWindow
+	if value := os.Getenv("PAYMENT_WEBHOOK_REPLAY_WINDOW"); value != "" {
+		parsedDuration, err := time.ParseDuration(value)
+		if err != nil || parsedDuration <= 0 {
+			return paymentConfig{}, errors.New("PAYMENT_WEBHOOK_REPLAY_WINDOW must be a positive duration")
+		}
+		replayWindow = parsedDuration
+	}
+	return paymentConfig{provider: provider, webhookSecret: webhookSecret, replayWindow: replayWindow}, nil
 }
 
 func environmentOr(name, fallback string) string {

@@ -40,6 +40,10 @@ services:
       AUTH_JWT_SECRET: local-development-jwt-secret-change-me
       AUTH_ACCESS_TOKEN_TTL: 1h
       AUTH_ADMIN_BOOTSTRAP_TOKEN: local-admin-bootstrap-token
+      APP_ENV: development
+      PAYMENT_PROVIDER: FAKE
+      PAYMENT_WEBHOOK_SECRET: local-payment-webhook-secret-change-me
+      PAYMENT_WEBHOOK_REPLAY_WINDOW: 5m
     ports:
       - "127.0.0.1:${CINEMAS_API_PORT:-18081}:8080"
 
