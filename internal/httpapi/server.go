@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 // Server exposes the cinema HTTP API.
 type Server struct {
 	e           *echo.Echo
+	logger      *slog.Logger
 	rateLimiter *clientRateLimiter
 }
 
@@ -104,7 +106,8 @@ func newServer(
 	e.Use(middleware.RequestID())
 	e.Use(middleware.Recover())
 
-	server := &Server{e: e, rateLimiter: newClientRateLimiter(time.Now)}
+	server := &Server{e: e, logger: defaultLogger(), rateLimiter: newClientRateLimiter(time.Now)}
+	e.Use(server.requestLogger)
 	e.GET("/healthz", server.health)
 	if authenticationService == nil {
 		e.POST("/v1/orders", server.createOrderHold(bookingService))

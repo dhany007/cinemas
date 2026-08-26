@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,24 @@ import (
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 )
+
+func TestServerLogsRequestMetadataWithoutRequestBody(t *testing.T) {
+	service := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	server := NewServer(service)
+	var logs bytes.Buffer
+	server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/healthz?token=not-logged", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if !strings.Contains(logs.String(), `"route":"/healthz"`) {
+		t.Fatalf("logs = %s, want health route", logs.String())
+	}
+	if strings.Contains(logs.String(), "not-logged") {
+		t.Fatalf("logs contain request query: %s", logs.String())
+	}
+}
 
 func TestServerRegistersCustomerAndUsesTokenIdentityForCheckout(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)

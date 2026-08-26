@@ -31,7 +31,7 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 - [x] Add CI for formatting, linting, tests, build, and migration validation.
 - [x] Add an API error/response contract document or OpenAPI specification.
 - [x] Add rate limiting for registration, login, order-hold, and payment routes.
-- [ ] Add structured request logging without passwords, tokens, or authorization headers.
+- [x] Add structured request logging without passwords, tokens, or authorization headers.
 
 **Done when:** a new developer can run the API and migrations locally, and every pull request executes the same automated validation.
 
