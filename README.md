@@ -18,6 +18,8 @@ The API listens on `:8080` by default. Set `ADDR` to override it. `GET /healthz`
 
 ## Implemented API
 
+`GET /v1/movies` returns public movie metadata in deterministic newest-first order. It accepts an optional `limit` from `1` to `100` (default `20`) and an opaque `cursor`; pass `next_cursor` from one response as the next request's `cursor` value. A malformed limit or cursor returns `400 INVALID_REQUEST`.
+
 `GET /v1/showtimes/{showtimeId}/seats` returns the public seat map for a UUID showtime. Each seat includes its price and current availability (`AVAILABLE`, `HELD`, `SOLD`, or `BLOCKED`); expired holds are returned as `AVAILABLE`. The response does not expose an order or hold owner.
 
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires an `Idempotency-Key` header and a JSON body:

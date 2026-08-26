@@ -5,19 +5,20 @@ import (
 	"net/http"
 
 	"github.com/citradigital/cinemas/internal/booking"
+	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
 
-// Server exposes the booking HTTP API.
+// Server exposes the cinema HTTP API.
 type Server struct {
 	e *echo.Echo
 }
 
 // NewServer creates an Echo server backed by the booking service.
 func NewServer(bookingService *booking.Service) *Server {
-	return newServer(bookingService, nil)
+	return newServer(bookingService, nil, nil)
 }
 
 // NewServerWithSeatMap creates an Echo server with booking and seat-map routes.
@@ -25,10 +26,23 @@ func NewServerWithSeatMap(
 	bookingService *booking.Service,
 	seatMapService *seatinventory.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService)
+	return newServer(bookingService, seatMapService, nil)
 }
 
-func newServer(bookingService *booking.Service, seatMapService *seatinventory.Service) *Server {
+// NewServerWithMovieCatalog creates an Echo server with public catalog and seat-map routes.
+func NewServerWithMovieCatalog(
+	bookingService *booking.Service,
+	seatMapService *seatinventory.Service,
+	movieCatalogService *catalog.Service,
+) *Server {
+	return newServer(bookingService, seatMapService, movieCatalogService)
+}
+
+func newServer(
+	bookingService *booking.Service,
+	seatMapService *seatinventory.Service,
+	movieCatalogService *catalog.Service,
+) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.RequestID())
@@ -39,6 +53,9 @@ func newServer(bookingService *booking.Service, seatMapService *seatinventory.Se
 	e.POST("/v1/orders", server.createOrderHold(bookingService))
 	if seatMapService != nil {
 		e.GET("/v1/showtimes/:showtimeID/seats", server.getShowtimeSeats(seatMapService))
+	}
+	if movieCatalogService != nil {
+		e.GET("/v1/movies", server.listMovies(movieCatalogService))
 	}
 	return server
 }
@@ -79,6 +96,21 @@ type seatResponse struct {
 	PriceAmount string `json:"price_amount"`
 	Currency    string `json:"currency"`
 	Status      string `json:"status"`
+}
+
+type movieListResponse struct {
+	Movies     []movieResponse `json:"movies"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+}
+
+type movieResponse struct {
+	ID              string  `json:"id"`
+	Title           string  `json:"title"`
+	DurationMinutes int     `json:"duration_minutes"`
+	Rating          *string `json:"rating,omitempty"`
+	Synopsis        *string `json:"synopsis,omitempty"`
+	PosterURL       *string `json:"poster_url,omitempty"`
+	ReleaseDate     *string `json:"release_date,omitempty"`
 }
 
 const uuidLength = 36
@@ -152,6 +184,44 @@ func (s *Server) getShowtimeSeats(service *seatinventory.Service) echo.HandlerFu
 		return c.JSON(http.StatusOK, seatMapResponse{
 			ShowtimeID: showtimeID,
 			Seats:      responseSeats,
+		})
+	}
+}
+
+func (s *Server) listMovies(service *catalog.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		limit, err := catalog.ParsePageSize(c.QueryParam("limit"))
+		if err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "limit must be between 1 and 100")
+		}
+
+		page, err := service.ListMovies(c.Request().Context(), catalog.ListInput{
+			Limit:  limit,
+			Cursor: c.QueryParam("cursor"),
+		})
+		if err != nil {
+			if errors.Is(err, catalog.ErrInvalidCursor) || errors.Is(err, catalog.ErrInvalidPageSize) {
+				return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "cursor or limit is invalid")
+			}
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to load movies")
+		}
+
+		movies := make([]movieResponse, len(page.Movies))
+		for i, movie := range page.Movies {
+			movies[i] = movieResponse{
+				ID:              movie.ID,
+				Title:           movie.Title,
+				DurationMinutes: movie.DurationMinutes,
+				Rating:          movie.Rating,
+				Synopsis:        movie.Synopsis,
+				PosterURL:       movie.PosterURL,
+				ReleaseDate:     movie.ReleaseDate,
+			}
+		}
+
+		return c.JSON(http.StatusOK, movieListResponse{
+			Movies:     movies,
+			NextCursor: page.NextCursor,
 		})
 	}
 }

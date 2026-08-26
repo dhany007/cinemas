@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/citradigital/cinemas/internal/booking"
+	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 )
 
@@ -116,6 +117,67 @@ func TestServerGetShowtimeSeatsReturnsValidationErrorForInvalidShowtimeID(t *tes
 	server := NewServerWithSeatMap(bookingService, seatMapService)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/showtimes/not-a-uuid/seats", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMovies(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository([]catalog.Movie{
+		{
+			ID:              "10000000-0000-4000-8000-000000000001",
+			Title:           "First Movie",
+			DurationMinutes: 120,
+			CreatedAt:       time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC),
+		},
+	}))
+	server := NewServerWithMovieCatalog(bookingService, seatMapService, movieCatalogService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/movies?limit=1", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if want := `"title":"First Movie"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMoviesRejectsInvalidLimit(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository(nil))
+	server := NewServerWithMovieCatalog(bookingService, seatMapService, movieCatalogService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/movies?limit=101", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMoviesRejectsInvalidCursor(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository(nil))
+	server := NewServerWithMovieCatalog(bookingService, seatMapService, movieCatalogService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/movies?cursor=invalid", nil)
 
 	server.ServeHTTP(recorder, request)
 
