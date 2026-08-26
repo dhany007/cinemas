@@ -996,6 +996,8 @@ func writeShowtimeError(c echo.Context, err error, operation string) error {
 		return writeError(c, http.StatusNotFound, "SHOWTIME_NOT_FOUND", "showtime was not found")
 	case errors.Is(err, adminservice.ErrShowtimeInUse):
 		return writeError(c, http.StatusConflict, "SHOWTIME_IN_USE", "showtime inventory has already been used")
+	case errors.Is(err, adminservice.ErrShowtimeOverlap):
+		return writeError(c, http.StatusConflict, "SHOWTIME_OVERLAP", "showtime overlaps another screening in this studio")
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" showtime")
 	}

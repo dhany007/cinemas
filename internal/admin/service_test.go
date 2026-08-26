@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -218,8 +219,31 @@ func TestServiceManagesShowtimeAndMaterializesSeats(t *testing.T) {
 	if len(materialized) != 1 || materialized[0].SeatID != seat.ID || materialized[0].PriceAmount != "50000.00" {
 		t.Fatalf("materialized seats = %#v, want one priced physical seat", materialized)
 	}
-
-	updated, err := service.UpdateShowtime(ctx, UpdateShowtimeInput{
+	_, err = service.CreateShowtime(ctx, CreateShowtimeInput{
+		ActorUserID: actorUserID,
+		MovieID:     movie.ID,
+		StudioID:    studio.ID,
+		StartsAt:    startsAt.Add(time.Hour),
+		EndsAt:      endsAt.Add(time.Hour),
+		BasePrice:   "50000.00",
+		Currency:    "IDR",
+	})
+	if !errors.Is(err, ErrShowtimeOverlap) {
+		t.Fatalf("CreateShowtime() overlap error = %v, want ErrShowtimeOverlap", err)
+	}
+	_, err = service.CreateShowtime(ctx, CreateShowtimeInput{
+		ActorUserID: actorUserID,
+		MovieID:     movie.ID,
+		StudioID:    studio.ID,
+		StartsAt:    endsAt,
+		EndsAt:      endsAt.Add(2 * time.Hour),
+		BasePrice:   "50000.00",
+		Currency:    "IDR",
+	})
+	if err != nil {
+		t.Fatalf("CreateShowtime() adjacent interval error = %v", err)
+	}
+	_, err = service.UpdateShowtime(ctx, UpdateShowtimeInput{
 		ActorUserID: actorUserID,
 		ID:          showtime.ID,
 		MovieID:     movie.ID,
@@ -229,10 +253,24 @@ func TestServiceManagesShowtimeAndMaterializesSeats(t *testing.T) {
 		BasePrice:   "55000.50",
 		Currency:    "IDR",
 	})
+	if !errors.Is(err, ErrShowtimeOverlap) {
+		t.Fatalf("UpdateShowtime() overlap error = %v, want ErrShowtimeOverlap", err)
+	}
+
+	updated, err := service.UpdateShowtime(ctx, UpdateShowtimeInput{
+		ActorUserID: actorUserID,
+		ID:          showtime.ID,
+		MovieID:     movie.ID,
+		StudioID:    studio.ID,
+		StartsAt:    startsAt.Add(-3 * time.Hour),
+		EndsAt:      endsAt.Add(-3 * time.Hour),
+		BasePrice:   "55000.50",
+		Currency:    "IDR",
+	})
 	if err != nil {
 		t.Fatalf("UpdateShowtime() error = %v", err)
 	}
-	if updated.BasePrice != "55000.50" || !updated.StartsAt.Equal(startsAt.Add(3*time.Hour)) {
+	if updated.BasePrice != "55000.50" || !updated.StartsAt.Equal(startsAt.Add(-3*time.Hour)) {
 		t.Fatalf("updated showtime = %#v, want replacement values", updated)
 	}
 	materialized = repository.ShowtimeSeats(showtime.ID)
@@ -246,7 +284,7 @@ func TestServiceManagesShowtimeAndMaterializesSeats(t *testing.T) {
 	if got := repository.ShowtimeSeats(showtime.ID); len(got) != 0 {
 		t.Fatalf("materialized seats after delete = %#v, want none", got)
 	}
-	if got := repository.AuditEvents(); len(got) != 7 || got[4].EntityType != "SHOWTIME" || got[6].Action != "DELETE" {
+	if got := repository.AuditEvents(); len(got) != 8 || got[4].EntityType != "SHOWTIME" || got[7].Action != "DELETE" {
 		t.Fatalf("audit events = %#v, want showtime mutations", got)
 	}
 }

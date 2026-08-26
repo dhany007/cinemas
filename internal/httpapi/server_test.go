@@ -666,6 +666,22 @@ func TestServerAdminShowtimeCRUD(t *testing.T) {
 	if !isUUID(created.ID) {
 		t.Fatalf("created showtime ID = %q, want UUID", created.ID)
 	}
+	overlapBody := `{"movie_id":"` + movie.ID + `","studio_id":"` + studio.ID + `",` +
+		`"starts_at":"2026-08-26T11:00:00Z","ends_at":"2026-08-26T13:00:00Z",` +
+		`"base_price":"50000.00","currency":"IDR"}`
+	overlapRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/showtimes",
+		overlapBody,
+		adminSession.AccessToken,
+	)
+	if overlapRecorder.Code != http.StatusConflict {
+		t.Fatalf("overlap status = %d, body = %s", overlapRecorder.Code, overlapRecorder.Body.String())
+	}
+	if want := `"code":"SHOWTIME_OVERLAP"`; !bytes.Contains(overlapRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("overlap body = %s, want %s", overlapRecorder.Body.String(), want)
+	}
 
 	listRecorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/showtimes", "", adminSession.AccessToken)
 	if listRecorder.Code != http.StatusOK {

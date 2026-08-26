@@ -549,6 +549,9 @@ func (r *AdminRepository) CreateShowtime(
 		showtime.BasePrice,
 		showtime.Currency,
 	); err != nil {
+		if isShowtimeOverlap(err) {
+			return admin.Showtime{}, admin.ErrShowtimeOverlap
+		}
 		return admin.Showtime{}, fmt.Errorf("insert showtime: %w", err)
 	}
 	if err := materializeShowtimeSeats(ctx, tx, showtime); err != nil {
@@ -625,6 +628,9 @@ func (r *AdminRepository) UpdateShowtime(
 		showtime.Currency,
 	)
 	if err != nil {
+		if isShowtimeOverlap(err) {
+			return admin.Showtime{}, admin.ErrShowtimeOverlap
+		}
 		return admin.Showtime{}, fmt.Errorf("update showtime: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -717,4 +723,9 @@ func materializeShowtimeSeats(ctx context.Context, tx pgx.Tx, showtime admin.Sho
 		return fmt.Errorf("materialize showtime seats: %w", err)
 	}
 	return nil
+}
+
+func isShowtimeOverlap(err error) bool {
+	var databaseError *pgconn.PgError
+	return errors.As(err, &databaseError) && databaseError.Code == "23P01"
 }

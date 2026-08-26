@@ -29,6 +29,8 @@ var (
 	ErrShowtimeNotFound = errors.New("showtime not found")
 	// ErrShowtimeInUse indicates a showtime has dependent inventory or orders.
 	ErrShowtimeInUse = errors.New("showtime in use")
+	// ErrShowtimeOverlap indicates an interval overlaps another showtime in the same studio.
+	ErrShowtimeOverlap = errors.New("showtime overlap")
 )
 
 // Cinema is an administrator-managed cinema location.

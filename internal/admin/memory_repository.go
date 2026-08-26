@@ -43,6 +43,9 @@ func (r *MemoryRepository) CreateShowtime(ctx context.Context, showtime Showtime
 	if _, found := r.studios[showtime.StudioID]; !found {
 		return Showtime{}, ErrStudioNotFound
 	}
+	if r.hasOverlappingShowtime(showtime) {
+		return Showtime{}, ErrShowtimeOverlap
+	}
 	r.showtimes[showtime.ID] = showtime
 	r.showtimeSeats[showtime.ID] = r.materializeShowtimeSeats(showtime)
 	r.audits = append(r.audits, audit)
@@ -85,6 +88,9 @@ func (r *MemoryRepository) UpdateShowtime(ctx context.Context, showtime Showtime
 	if _, found := r.studios[showtime.StudioID]; !found {
 		return Showtime{}, ErrStudioNotFound
 	}
+	if r.hasOverlappingShowtime(showtime) {
+		return Showtime{}, ErrShowtimeOverlap
+	}
 	r.showtimes[showtime.ID] = showtime
 	r.showtimeSeats[showtime.ID] = r.materializeShowtimeSeats(showtime)
 	r.audits = append(r.audits, audit)
@@ -123,6 +129,18 @@ func (r *MemoryRepository) materializeShowtimeSeats(showtime Showtime) []Showtim
 	}
 	sort.Slice(seats, func(i, j int) bool { return seats[i].SeatID < seats[j].SeatID })
 	return seats
+}
+
+func (r *MemoryRepository) hasOverlappingShowtime(candidate Showtime) bool {
+	for _, existing := range r.showtimes {
+		if existing.ID == candidate.ID || existing.StudioID != candidate.StudioID {
+			continue
+		}
+		if candidate.StartsAt.Before(existing.EndsAt) && existing.StartsAt.Before(candidate.EndsAt) {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateMovie stores a movie and its audit event.

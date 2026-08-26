@@ -255,6 +255,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/ShowtimeReferenceNotFound'}
+        '409': {$ref: '#/components/responses/ShowtimeOverlap'}
   /v1/admin/showtimes/{showtimeID}:
     patch:
       summary: Replace a showtime and rematerialize unused seat inventory
@@ -267,7 +268,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/ShowtimeReferenceNotFound'}
-        '409': {$ref: '#/components/responses/ShowtimeInUse'}
+        '409': {$ref: '#/components/responses/ShowtimeUpdateConflict'}
     delete:
       summary: Delete a showtime without dependent inventory or orders
       security: [{bearerAuth: []}]
@@ -494,6 +495,8 @@ components:
     ShowtimeNotFound: {description: Showtime not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ShowtimeReferenceNotFound: {description: Showtime, movie, or studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ShowtimeInUse: {description: Showtime has dependent inventory or orders, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ShowtimeOverlap: {description: Showtime overlaps another screening in the same studio, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ShowtimeUpdateConflict: {description: Showtime overlaps another screening or has inventory already in use, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     CinemaNotFound: {description: Cinema not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     StudioNotFound: {description: Studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatNotFound: {description: Seat not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
