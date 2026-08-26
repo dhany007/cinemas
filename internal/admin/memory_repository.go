@@ -12,11 +12,106 @@ type MemoryRepository struct {
 	audits  []AuditEvent
 	cinemas map[string]Cinema
 	studios map[string]Studio
+	seats   map[string]Seat
 }
 
 // NewMemoryRepository creates an empty test repository.
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{cinemas: make(map[string]Cinema), studios: make(map[string]Studio)}
+	return &MemoryRepository{
+		cinemas: make(map[string]Cinema),
+		studios: make(map[string]Studio),
+		seats:   make(map[string]Seat),
+	}
+}
+
+// CreateSeat stores a physical seat and its audit event.
+func (r *MemoryRepository) CreateSeat(ctx context.Context, seat Seat, audit AuditEvent) (Seat, error) {
+	if err := ctx.Err(); err != nil {
+		return Seat{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.studios[seat.StudioID]; !found {
+		return Seat{}, ErrStudioNotFound
+	}
+	if r.hasSeatLayoutPosition(seat) {
+		return Seat{}, ErrSeatAlreadyExists
+	}
+	r.seats[seat.ID] = seat
+	r.audits = append(r.audits, audit)
+	return seat, nil
+}
+
+// ListSeats returns stored seats in stable layout order.
+func (r *MemoryRepository) ListSeats(ctx context.Context) ([]Seat, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	seats := make([]Seat, 0, len(r.seats))
+	for _, seat := range r.seats {
+		seats = append(seats, seat)
+	}
+	sort.Slice(seats, func(i, j int) bool {
+		if seats[i].StudioID != seats[j].StudioID {
+			return seats[i].StudioID < seats[j].StudioID
+		}
+		if seats[i].RowLabel != seats[j].RowLabel {
+			return seats[i].RowLabel < seats[j].RowLabel
+		}
+		if seats[i].SeatNumber != seats[j].SeatNumber {
+			return seats[i].SeatNumber < seats[j].SeatNumber
+		}
+		return seats[i].ID < seats[j].ID
+	})
+	return seats, nil
+}
+
+// UpdateSeat replaces a physical seat and its audit event.
+func (r *MemoryRepository) UpdateSeat(ctx context.Context, seat Seat, audit AuditEvent) (Seat, error) {
+	if err := ctx.Err(); err != nil {
+		return Seat{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.seats[seat.ID]; !found {
+		return Seat{}, ErrSeatNotFound
+	}
+	if _, found := r.studios[seat.StudioID]; !found {
+		return Seat{}, ErrStudioNotFound
+	}
+	if r.hasSeatLayoutPosition(seat) {
+		return Seat{}, ErrSeatAlreadyExists
+	}
+	r.seats[seat.ID] = seat
+	r.audits = append(r.audits, audit)
+	return seat, nil
+}
+
+// DeleteSeat removes a physical seat and records its audit event.
+func (r *MemoryRepository) DeleteSeat(ctx context.Context, id string, audit AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.seats[id]; !found {
+		return ErrSeatNotFound
+	}
+	delete(r.seats, id)
+	r.audits = append(r.audits, audit)
+	return nil
+}
+
+func (r *MemoryRepository) hasSeatLayoutPosition(candidate Seat) bool {
+	for _, seat := range r.seats {
+		if seat.ID != candidate.ID && seat.StudioID == candidate.StudioID && seat.RowLabel == candidate.RowLabel &&
+			seat.SeatNumber == candidate.SeatNumber {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateStudio stores a studio and audit event.

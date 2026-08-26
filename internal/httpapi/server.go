@@ -164,6 +164,10 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 	s.e.PATCH("/v1/admin/studios/:studioID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateStudio(service)))
 	//nolint:lll // Route authorization remains explicit.
 	s.e.DELETE("/v1/admin/studios/:studioID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteStudio(service)))
+	s.e.GET("/v1/admin/seats", s.requireRole(authenticationService, auth.RoleAdmin, s.listSeats(service)))
+	s.e.POST("/v1/admin/seats", s.requireRole(authenticationService, auth.RoleAdmin, s.createSeat(service)))
+	s.e.PATCH("/v1/admin/seats/:seatID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateSeat(service)))
+	s.e.DELETE("/v1/admin/seats/:seatID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteSeat(service)))
 }
 
 type createOrderRequest struct {
@@ -210,6 +214,22 @@ type studioResponse struct {
 }
 type studioListResponse struct {
 	Studios []studioResponse `json:"studios"`
+}
+type seatLayoutRequest struct {
+	StudioID   string `json:"studio_id"`
+	RowLabel   string `json:"row_label"`
+	SeatNumber string `json:"seat_number"`
+	SeatType   string `json:"seat_type"`
+}
+type seatLayoutResponse struct {
+	ID         string `json:"id"`
+	StudioID   string `json:"studio_id"`
+	RowLabel   string `json:"row_label"`
+	SeatNumber string `json:"seat_number"`
+	SeatType   string `json:"seat_type"`
+}
+type seatLayoutListResponse struct {
+	Seats []seatLayoutResponse `json:"seats"`
 }
 
 type seatMapResponse struct {
@@ -534,6 +554,134 @@ func writeStudioError(c echo.Context, err error) error {
 		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "cinema ID and name are required")
 	}
 	return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to manage studio")
+}
+
+func (s *Server) createSeat(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request seatLayoutRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		if !isUUID(request.StudioID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "studio ID must be a UUID")
+		}
+		seat, err := service.CreateSeat(c.Request().Context(), adminservice.CreateSeatInput{
+			ActorUserID: identity.UserID,
+			StudioID:    request.StudioID,
+			RowLabel:    request.RowLabel,
+			SeatNumber:  request.SeatNumber,
+			SeatType:    request.SeatType,
+		})
+		if err != nil {
+			return writeSeatError(c, err, "create")
+		}
+		return c.JSON(http.StatusCreated, toSeatLayoutResponse(seat))
+	}
+}
+
+func (s *Server) listSeats(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		seats, err := service.ListSeats(c.Request().Context())
+		if err != nil {
+			return writeSeatError(c, err, "list")
+		}
+		response := make([]seatLayoutResponse, len(seats))
+		for i, seat := range seats {
+			response[i] = toSeatLayoutResponse(seat)
+		}
+		return c.JSON(http.StatusOK, seatLayoutListResponse{Seats: response})
+	}
+}
+
+func (s *Server) updateSeat(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		seatID, err := seatIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request seatLayoutRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		if !isUUID(request.StudioID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "studio ID must be a UUID")
+		}
+		seat, err := service.UpdateSeat(c.Request().Context(), adminservice.UpdateSeatInput{
+			ActorUserID: identity.UserID,
+			ID:          seatID,
+			StudioID:    request.StudioID,
+			RowLabel:    request.RowLabel,
+			SeatNumber:  request.SeatNumber,
+			SeatType:    request.SeatType,
+		})
+		if err != nil {
+			return writeSeatError(c, err, "update")
+		}
+		return c.JSON(http.StatusOK, toSeatLayoutResponse(seat))
+	}
+}
+
+func (s *Server) deleteSeat(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		seatID, err := seatIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		if err := service.DeleteSeat(c.Request().Context(), identity.UserID, seatID); err != nil {
+			return writeSeatError(c, err, "delete")
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func seatIDParam(c echo.Context) (string, error) {
+	seatID := c.Param("seatID")
+	if !isUUID(seatID) {
+		return "", writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "seat ID must be a UUID")
+	}
+	return seatID, nil
+}
+
+func toSeatLayoutResponse(seat adminservice.Seat) seatLayoutResponse {
+	return seatLayoutResponse{
+		ID:         seat.ID,
+		StudioID:   seat.StudioID,
+		RowLabel:   seat.RowLabel,
+		SeatNumber: seat.SeatNumber,
+		SeatType:   seat.SeatType,
+	}
+}
+
+func writeSeatError(c echo.Context, err error, operation string) error {
+	switch {
+	case errors.Is(err, adminservice.ErrInvalidSeatInput):
+		return writeError(
+			c,
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"studio ID, row label, seat number, and seat type are required",
+		)
+	case errors.Is(err, adminservice.ErrStudioNotFound):
+		return writeError(c, http.StatusNotFound, "STUDIO_NOT_FOUND", "studio was not found")
+	case errors.Is(err, adminservice.ErrSeatNotFound):
+		return writeError(c, http.StatusNotFound, "SEAT_NOT_FOUND", "seat was not found")
+	case errors.Is(err, adminservice.ErrSeatAlreadyExists):
+		return writeError(c, http.StatusConflict, "SEAT_ALREADY_EXISTS", "seat position already exists in this studio")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" seat")
+	}
 }
 
 func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {

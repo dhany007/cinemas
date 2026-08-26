@@ -128,6 +128,55 @@ func (s *Service) DeleteStudio(ctx context.Context, actorID, id string) error {
 	}
 	return s.repository.DeleteStudio(ctx, id, AuditEvent{ActorUserID: actorID, EntityType: "STUDIO", EntityID: id, Action: "DELETE"}) //nolint:lll // Audit event stays visible at the call site.
 }
+
+// CreateSeat validates, creates, and audits a physical seat.
+func (s *Service) CreateSeat(ctx context.Context, input CreateSeatInput) (Seat, error) {
+	return s.saveSeat(
+		ctx,
+		"",
+		input.ActorUserID,
+		input.StudioID,
+		input.RowLabel,
+		input.SeatNumber,
+		input.SeatType,
+		"CREATE",
+	)
+}
+
+// ListSeats returns all configured physical seats.
+func (s *Service) ListSeats(ctx context.Context) ([]Seat, error) {
+	return s.repository.ListSeats(ctx)
+}
+
+// UpdateSeat replaces a physical seat and records an audit event.
+func (s *Service) UpdateSeat(ctx context.Context, input UpdateSeatInput) (Seat, error) {
+	return s.saveSeat(
+		ctx,
+		input.ID,
+		input.ActorUserID,
+		input.StudioID,
+		input.RowLabel,
+		input.SeatNumber,
+		input.SeatType,
+		"UPDATE",
+	)
+}
+
+// DeleteSeat removes a physical seat and records an audit event.
+func (s *Service) DeleteSeat(ctx context.Context, actorUserID, id string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	id = strings.TrimSpace(id)
+	if actorUserID == "" || id == "" {
+		return ErrInvalidSeatInput
+	}
+	return s.repository.DeleteSeat(ctx, id, AuditEvent{
+		ActorUserID: actorUserID,
+		EntityType:  "SEAT",
+		EntityID:    id,
+		Action:      "DELETE",
+	})
+}
+
 func (s *Service) saveStudio(ctx context.Context, id, actorID, cinemaID, name, action string) (Studio, error) {
 	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(cinemaID) == "" || strings.TrimSpace(name) == "" {
 		return Studio{}, ErrInvalidCinemaInput
@@ -145,6 +194,34 @@ func (s *Service) saveStudio(ctx context.Context, id, actorID, cinemaID, name, a
 		return s.repository.CreateStudio(ctx, studio, audit)
 	}
 	return s.repository.UpdateStudio(ctx, studio, audit)
+}
+
+func (s *Service) saveSeat(
+	ctx context.Context,
+	id, actorUserID, studioID, rowLabel, seatNumber, seatType, action string,
+) (Seat, error) {
+	actorUserID = strings.TrimSpace(actorUserID)
+	id = strings.TrimSpace(id)
+	studioID = strings.TrimSpace(studioID)
+	rowLabel = strings.TrimSpace(rowLabel)
+	seatNumber = strings.TrimSpace(seatNumber)
+	seatType = strings.TrimSpace(seatType)
+	if actorUserID == "" || studioID == "" || rowLabel == "" || seatNumber == "" || seatType == "" {
+		return Seat{}, ErrInvalidSeatInput
+	}
+	if id == "" {
+		var err error
+		id, err = s.newID()
+		if err != nil {
+			return Seat{}, fmt.Errorf("generate seat id: %w", err)
+		}
+	}
+	seat := Seat{ID: id, StudioID: studioID, RowLabel: rowLabel, SeatNumber: seatNumber, SeatType: seatType}
+	audit := AuditEvent{ActorUserID: actorUserID, EntityType: "SEAT", EntityID: id, Action: action}
+	if action == "CREATE" {
+		return s.repository.CreateSeat(ctx, seat, audit)
+	}
+	return s.repository.UpdateSeat(ctx, seat, audit)
 }
 
 func newCinemaID() (string, error) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/citradigital/cinemas/internal/admin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -260,4 +261,134 @@ func (r *AdminRepository) DeleteStudio(ctx context.Context, id string, audit adm
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// CreateSeat stores a physical seat and its audit event atomically.
+func (r *AdminRepository) CreateSeat(ctx context.Context, seat admin.Seat, audit admin.AuditEvent) (admin.Seat, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Seat{}, fmt.Errorf("begin seat create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO seats (id, studio_id, row_label, seat_number, seat_type) VALUES ($1, $2, $3, $4, $5)`,
+		seat.ID,
+		seat.StudioID,
+		seat.RowLabel,
+		seat.SeatNumber,
+		seat.SeatType,
+	); err != nil {
+		if isSeatLayoutConflict(err) {
+			return admin.Seat{}, admin.ErrSeatAlreadyExists
+		}
+		if isForeignKeyViolation(err) {
+			return admin.Seat{}, admin.ErrStudioNotFound
+		}
+		return admin.Seat{}, fmt.Errorf("insert seat: %w", err)
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Seat{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Seat{}, fmt.Errorf("commit seat create: %w", err)
+	}
+	return seat, nil
+}
+
+// ListSeats returns physical seats in stable layout order.
+func (r *AdminRepository) ListSeats(ctx context.Context) ([]admin.Seat, error) {
+	rows, err := r.pool.Query(
+		ctx,
+		`SELECT id::text, studio_id::text, row_label, seat_number, seat_type
+		 FROM seats ORDER BY studio_id, row_label, seat_number, id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list seats: %w", err)
+	}
+	defer rows.Close()
+	var seats []admin.Seat
+	for rows.Next() {
+		var seat admin.Seat
+		if err := rows.Scan(&seat.ID, &seat.StudioID, &seat.RowLabel, &seat.SeatNumber, &seat.SeatType); err != nil {
+			return nil, fmt.Errorf("scan seat: %w", err)
+		}
+		seats = append(seats, seat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate seats: %w", err)
+	}
+	return seats, nil
+}
+
+// UpdateSeat replaces a physical seat and its audit event atomically.
+func (r *AdminRepository) UpdateSeat(ctx context.Context, seat admin.Seat, audit admin.AuditEvent) (admin.Seat, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Seat{}, fmt.Errorf("begin seat update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(
+		ctx,
+		`UPDATE seats
+		 SET studio_id = $2, row_label = $3, seat_number = $4, seat_type = $5, updated_at = now()
+		 WHERE id = $1`,
+		seat.ID,
+		seat.StudioID,
+		seat.RowLabel,
+		seat.SeatNumber,
+		seat.SeatType,
+	)
+	if err != nil {
+		if isSeatLayoutConflict(err) {
+			return admin.Seat{}, admin.ErrSeatAlreadyExists
+		}
+		if isForeignKeyViolation(err) {
+			return admin.Seat{}, admin.ErrStudioNotFound
+		}
+		return admin.Seat{}, fmt.Errorf("update seat: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.Seat{}, admin.ErrSeatNotFound
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Seat{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Seat{}, fmt.Errorf("commit seat update: %w", err)
+	}
+	return seat, nil
+}
+
+// DeleteSeat removes a physical seat and creates its audit event atomically.
+func (r *AdminRepository) DeleteSeat(ctx context.Context, id string, audit admin.AuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin seat delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `DELETE FROM seats WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete seat: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.ErrSeatNotFound
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit seat delete: %w", err)
+	}
+	return nil
+}
+
+func isSeatLayoutConflict(err error) bool {
+	var databaseError *pgconn.PgError
+	return errors.As(err, &databaseError) && databaseError.Code == "23505"
+}
+
+func isForeignKeyViolation(err error) bool {
+	var databaseError *pgconn.PgError
+	return errors.As(err, &databaseError) && databaseError.Code == "23503"
 }

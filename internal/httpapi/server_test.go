@@ -351,6 +351,182 @@ func TestServerAdminStudioCRUD(t *testing.T) {
 	}
 }
 
+func TestServerAdminSeatLayoutCRUD(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email:       "seat-admin@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+
+	cinema := createAdminCinema(t, server, adminSession.AccessToken)
+	studio := createAdminStudio(t, server, cinema.ID, adminSession.AccessToken)
+	createRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/seats",
+		`{"studio_id":"`+studio.ID+`","row_label":"A","seat_number":"1","seat_type":"STANDARD"}`,
+		adminSession.AccessToken,
+	)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created seat: %v", err)
+	}
+	if !isUUID(created.ID) {
+		t.Fatalf("created seat ID = %q, want UUID", created.ID)
+	}
+
+	listRecorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/seats", "", adminSession.AccessToken)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	if want := `"seat_number":"1"`; !bytes.Contains(listRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("list body = %s, want %s", listRecorder.Body.String(), want)
+	}
+
+	updateRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPatch,
+		"/v1/admin/seats/"+created.ID,
+		`{"studio_id":"`+studio.ID+`","row_label":"A","seat_number":"2","seat_type":"PREMIUM"}`,
+		adminSession.AccessToken,
+	)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body = %s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	if want := `"seat_type":"PREMIUM"`; !bytes.Contains(updateRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("update body = %s, want %s", updateRecorder.Body.String(), want)
+	}
+
+	deleteRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodDelete,
+		"/v1/admin/seats/"+created.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body = %s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+func TestServerRejectsCustomerSeatLayoutManagement(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	customerSession, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email:       "seat-customer@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Customer",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+
+	recorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/seats", "", customerSession.AccessToken)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if want := `"code":"FORBIDDEN"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerRejectsDuplicateSeatLayoutPosition(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email:       "seat-conflict-admin@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+	cinema := createAdminCinema(t, server, adminSession.AccessToken)
+	studio := createAdminStudio(t, server, cinema.ID, adminSession.AccessToken)
+	body := `{"studio_id":"` + studio.ID + `","row_label":"A","seat_number":"1","seat_type":"STANDARD"}`
+	first := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/seats", body, adminSession.AccessToken)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d, body = %s", first.Code, first.Body.String())
+	}
+
+	duplicate := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/seats", body, adminSession.AccessToken)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate status = %d, want %d; body = %s", duplicate.Code, http.StatusConflict, duplicate.Body.String())
+	}
+	if want := `"code":"SEAT_ALREADY_EXISTS"`; !bytes.Contains(duplicate.Body.Bytes(), []byte(want)) {
+		t.Fatalf("duplicate body = %s, want %s", duplicate.Body.String(), want)
+	}
+}
+
+func createAdminCinema(t *testing.T, server *Server, accessToken string) cinemaResponse {
+	t.Helper()
+	recorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/cinemas",
+		`{"name":"Central Cinema","address":"Jl. Example 1","city":"Jakarta"}`,
+		accessToken,
+	)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create cinema status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var cinema cinemaResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &cinema); err != nil {
+		t.Fatalf("unmarshal cinema: %v", err)
+	}
+	return cinema
+}
+
+func createAdminStudio(t *testing.T, server *Server, cinemaID, accessToken string) studioResponse {
+	t.Helper()
+	recorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/studios",
+		`{"cinema_id":"`+cinemaID+`","name":"Studio 1"}`,
+		accessToken,
+	)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create studio status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var studio studioResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &studio); err != nil {
+		t.Fatalf("unmarshal studio: %v", err)
+	}
+	return studio
+}
+
 func serveAdminCinemaRequest(
 	server *Server,
 	method string,

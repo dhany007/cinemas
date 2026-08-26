@@ -41,7 +41,7 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 - [x] Add authenticated admin-only CRUD for cinemas.
 - [x] Add authenticated admin-only CRUD for studios.
-- [ ] Add authenticated admin-only CRUD for seat layouts.
+- [x] Add authenticated admin-only CRUD for seat layouts.
 - [ ] Add authenticated admin-only CRUD for movies.
 - [ ] Add authenticated admin-only CRUD for showtimes and materialize `showtime_seats`.
 - [ ] Reject overlapping showtimes in one studio.

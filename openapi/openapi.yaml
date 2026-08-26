@@ -101,6 +101,31 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/CinemaNotFound'}
+    patch:
+      summary: Replace a cinema's name and location
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CinemaID'}]
+      requestBody: {$ref: '#/components/requestBodies/CinemaWrite'}
+      responses:
+        '200':
+          description: Cinema updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Cinema'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/CinemaNotFound'}
+    delete:
+      summary: Delete a cinema without dependent studios
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CinemaID'}]
+      responses:
+        '204': {description: Cinema deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/CinemaNotFound'}
   /v1/admin/studios:
     get:
       summary: List studios
@@ -131,31 +156,48 @@ paths:
       responses:
         '204': {description: Studio deleted}
         '404': {$ref: '#/components/responses/StudioNotFound'}
+  /v1/admin/seats:
+    get:
+      summary: List physical seats in every configured studio layout
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Seats in deterministic layout order, content: {application/json: {schema: {$ref: '#/components/schemas/SeatLayoutList'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Add a physical seat to a studio layout
+      security: [{bearerAuth: []}]
+      requestBody: {$ref: '#/components/requestBodies/SeatLayoutWrite'}
+      responses:
+        '201': {description: Seat created, content: {application/json: {schema: {$ref: '#/components/schemas/SeatLayout'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/StudioNotFound'}
+        '409': {$ref: '#/components/responses/SeatAlreadyExists'}
+  /v1/admin/seats/{seatID}:
     patch:
-      summary: Replace a cinema's name and location
+      summary: Replace a physical seat in a studio layout
       security: [{bearerAuth: []}]
-      parameters: [{$ref: '#/components/parameters/CinemaID'}]
-      requestBody: {$ref: '#/components/requestBodies/CinemaWrite'}
+      parameters: [{$ref: '#/components/parameters/SeatID'}]
+      requestBody: {$ref: '#/components/requestBodies/SeatLayoutWrite'}
       responses:
-        '200':
-          description: Cinema updated
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/Cinema'}
+        '200': {description: Seat updated, content: {application/json: {schema: {$ref: '#/components/schemas/SeatLayout'}}}}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/CinemaNotFound'}
+        '404': {$ref: '#/components/responses/SeatNotFound'}
+        '409': {$ref: '#/components/responses/SeatAlreadyExists'}
     delete:
-      summary: Delete a cinema without dependent studios
+      summary: Delete a physical seat from a studio layout
       security: [{bearerAuth: []}]
-      parameters: [{$ref: '#/components/parameters/CinemaID'}]
+      parameters: [{$ref: '#/components/parameters/SeatID'}]
       responses:
-        '204': {description: Cinema deleted}
+        '204': {description: Seat deleted}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/CinemaNotFound'}
+        '404': {$ref: '#/components/responses/SeatNotFound'}
   /v1/movies:
     get:
       summary: List public movies
@@ -284,6 +326,7 @@ components:
     ShowtimeID: {name: showtimeID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
     OrderID: {name: orderID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
     CinemaID: {name: cinemaID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
+    SeatID: {name: seatID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
   requestBodies:
     Register:
       required: true
@@ -317,6 +360,18 @@ components:
             properties:
               cinema_id: {$ref: '#/components/schemas/UUID'}
               name: {type: string, minLength: 1}
+    SeatLayoutWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [studio_id, row_label, seat_number, seat_type]
+            properties:
+              studio_id: {$ref: '#/components/schemas/UUID'}
+              row_label: {type: string, minLength: 1}
+              seat_number: {type: string, minLength: 1}
+              seat_type: {type: string, minLength: 1}
   responses:
     SessionCreated: {description: Account created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
     Session: {description: Authenticated session, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
@@ -330,6 +385,8 @@ components:
     ShowtimeNotFound: {description: Showtime not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     CinemaNotFound: {description: Cinema not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     StudioNotFound: {description: Studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatNotFound: {description: Seat not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatAlreadyExists: {description: Seat position already exists in this studio, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotFound: {description: Order not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotPayable: {description: Order cannot be paid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatOrIdempotencyConflict: {description: Seat unavailable or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -396,6 +453,20 @@ components:
       required: [studios]
       properties:
         studios: {type: array, items: {$ref: '#/components/schemas/Studio'}}
+    SeatLayout:
+      type: object
+      required: [id, studio_id, row_label, seat_number, seat_type]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        studio_id: {$ref: '#/components/schemas/UUID'}
+        row_label: {type: string}
+        seat_number: {type: string}
+        seat_type: {type: string}
+    SeatLayoutList:
+      type: object
+      required: [seats]
+      properties:
+        seats: {type: array, items: {$ref: '#/components/schemas/SeatLayout'}}
     Showtime:
       type: object
       required: [id, studio_id, studio_name, cinema_id, cinema_name, cinema_city, starts_at, ends_at, base_price, currency]
