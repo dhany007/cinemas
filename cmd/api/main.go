@@ -29,6 +29,8 @@ const (
 	shutdownTimeout       = 10 * time.Second
 	defaultAccessTokenTTL = time.Hour
 	minimumJWTSecretBytes = 32
+	holdExpiryInterval    = 30 * time.Second
+	holdExpiryBatchSize   = 100
 )
 
 type authenticationConfig struct {
@@ -67,6 +69,9 @@ func main() {
 	}
 
 	bookingService := booking.NewService(postgres.NewBookingRepository(pool), defaultHoldDuration, time.Now)
+	expiryContext, cancelExpiry := context.WithCancel(context.Background())
+	defer cancelExpiry()
+	go runHoldExpiryWorker(expiryContext, logger, bookingService)
 	seatMapService := seatinventory.NewService(postgres.NewSeatMapRepository(pool))
 	movieCatalogService := catalog.NewService(postgres.NewMoviesRepository(pool))
 	showtimeService := scheduling.NewService(postgres.NewShowtimesRepository(pool))
@@ -120,6 +125,26 @@ func main() {
 		}
 	}
 	pool.Close()
+}
+
+func runHoldExpiryWorker(ctx context.Context, logger *slog.Logger, service *booking.Service) {
+	ticker := time.NewTicker(holdExpiryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			expired, err := service.ExpirePendingHolds(ctx, holdExpiryBatchSize)
+			if err != nil {
+				logger.Error("expire pending holds", "error", err)
+				continue
+			}
+			if expired > 0 {
+				logger.Info("expired pending holds", "count", expired)
+			}
+		}
+	}
 }
 
 func loadAuthenticationConfig() (authenticationConfig, error) {

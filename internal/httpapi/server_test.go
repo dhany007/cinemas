@@ -128,6 +128,76 @@ func TestServerRejectsCheckoutWithoutAccessToken(t *testing.T) {
 	}
 }
 
+func TestServerReturnsOnlyOwnedOrdersAndAllowsCancellation(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
+	bookingService := booking.NewService(
+		booking.NewMemoryRepository([]booking.Seat{{ID: "seat-a", ShowtimeID: "showtime-1", Status: booking.SeatAvailable}}),
+		10*time.Minute,
+		func() time.Time { return now },
+	)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		func() time.Time { return now },
+	)
+	owner, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email: "order-owner@example.com", Password: "correct horse battery staple", DisplayName: "Owner",
+	})
+	if err != nil {
+		t.Fatalf("Register() owner error = %v", err)
+	}
+	other, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email: "other-customer@example.com", Password: "correct horse battery staple", DisplayName: "Other",
+	})
+	if err != nil {
+		t.Fatalf("Register() other error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	createRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/orders",
+		strings.NewReader(`{"showtime_id":"showtime-1","seat_ids":["seat-a"]}`),
+	)
+	createRequest.Header.Set(echo.HeaderAuthorization, "Bearer "+owner.AccessToken)
+	createRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	createRequest.Header.Set("Idempotency-Key", "order-lifecycle-1")
+	create := httptest.NewRecorder()
+	server.ServeHTTP(create, createRequest)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create order status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var order struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &order); err != nil {
+		t.Fatalf("unmarshal created order: %v", err)
+	}
+
+	get := serveAdminCinemaRequest(server, http.MethodGet, "/v1/orders/"+order.ID, "", owner.AccessToken)
+	if get.Code != http.StatusOK {
+		t.Fatalf("get order status = %d, body = %s", get.Code, get.Body.String())
+	}
+	if want := `"status":"PENDING_PAYMENT"`; !bytes.Contains(get.Body.Bytes(), []byte(want)) {
+		t.Fatalf("get order body = %s, want %s", get.Body.String(), want)
+	}
+	history := serveAdminCinemaRequest(server, http.MethodGet, "/v1/orders", "", owner.AccessToken)
+	if history.Code != http.StatusOK {
+		t.Fatalf("list orders status = %d, body = %s", history.Code, history.Body.String())
+	}
+	foreign := serveAdminCinemaRequest(server, http.MethodGet, "/v1/orders/"+order.ID, "", other.AccessToken)
+	if foreign.Code != http.StatusNotFound {
+		t.Fatalf("foreign get order status = %d, body = %s", foreign.Code, foreign.Body.String())
+	}
+	cancel := serveAdminCinemaRequest(server, http.MethodPost, "/v1/orders/"+order.ID+"/cancel", "", owner.AccessToken)
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel order status = %d, body = %s", cancel.Code, cancel.Body.String())
+	}
+	if want := `"status":"CANCELLED"`; !bytes.Contains(cancel.Body.Bytes(), []byte(want)) {
+		t.Fatalf("cancel order body = %s, want %s", cancel.Body.String(), want)
+	}
+}
+
 func TestServerRejectsAdminBootstrapWithoutConfiguredToken(t *testing.T) {
 	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
 	authenticationService := auth.NewService(

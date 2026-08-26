@@ -130,6 +130,119 @@ WHERE id = ANY($4::uuid[])`, booking.SeatHeld, order.ID, order.ExpiresAt, seatID
 	return order, nil
 }
 
+// FindOrder returns an order only when it belongs to the supplied customer.
+func (r *BookingRepository) FindOrder(ctx context.Context, orderID, userID string) (booking.Order, error) {
+	order, err := findOrderByID(ctx, r.pool, orderID, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return booking.Order{}, booking.ErrOrderNotFound
+	}
+	if err != nil {
+		return booking.Order{}, fmt.Errorf("find order: %w", err)
+	}
+	return order, nil
+}
+
+// ListOrders returns a customer's order history in newest-first order.
+func (r *BookingRepository) ListOrders(ctx context.Context, userID string) ([]booking.Order, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id::text FROM orders WHERE user_id = $1 ORDER BY created_at DESC, id DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list order ids: %w", err)
+	}
+	defer rows.Close()
+	orders := make([]booking.Order, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan order id: %w", err)
+		}
+		order, err := findOrderByID(ctx, r.pool, id, userID)
+		if err != nil {
+			return nil, fmt.Errorf("load order: %w", err)
+		}
+		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orders: %w", err)
+	}
+	return orders, nil
+}
+
+// CancelOrder atomically cancels an owned active hold and releases its seats.
+func (r *BookingRepository) CancelOrder(ctx context.Context, orderID, userID string, now time.Time) (booking.Order, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return booking.Order{}, fmt.Errorf("begin cancel transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var status booking.OrderStatus
+	var expiresAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT status, expires_at FROM orders WHERE id=$1 AND user_id=$2 FOR UPDATE`, orderID, userID).Scan(&status, &expiresAt); errors.Is(err, pgx.ErrNoRows) {
+		return booking.Order{}, booking.ErrOrderNotFound
+	} else if err != nil {
+		return booking.Order{}, fmt.Errorf("lock order: %w", err)
+	}
+	if status != booking.OrderPendingPayment || !expiresAt.After(now) {
+		return booking.Order{}, booking.ErrOrderNotCancellable
+	}
+	if _, err := tx.Exec(ctx, `UPDATE orders SET status=$1, updated_at=now() WHERE id=$2`, booking.OrderCancelled, orderID); err != nil {
+		return booking.Order{}, fmt.Errorf("cancel order: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE showtime_seats SET status='AVAILABLE', hold_order_id=NULL, hold_expires_at=NULL, updated_at=now() WHERE hold_order_id=$1 AND status='HELD'`, orderID); err != nil {
+		return booking.Order{}, fmt.Errorf("release order seats: %w", err)
+	}
+	order, err := findOrderByID(ctx, tx, orderID, userID)
+	if err != nil {
+		return booking.Order{}, fmt.Errorf("load cancelled order: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return booking.Order{}, fmt.Errorf("commit cancellation: %w", err)
+	}
+	return order, nil
+}
+
+// ExpirePendingHolds processes a bounded batch using row locks that skip concurrent workers.
+func (r *BookingRepository) ExpirePendingHolds(ctx context.Context, now time.Time, limit int) (int, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin expiry transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT id::text FROM orders WHERE status='PENDING_PAYMENT' AND expires_at <= $1 ORDER BY expires_at, id LIMIT $2 FOR UPDATE SKIP LOCKED`, now, limit)
+	if err != nil {
+		return 0, fmt.Errorf("lock expired orders: %w", err)
+	}
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan expired order: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate expired orders: %w", err)
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return 0, fmt.Errorf("commit empty expiry: %w", err)
+		}
+		return 0, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE orders SET status='EXPIRED', updated_at=now() WHERE id=ANY($1::uuid[])`, ids); err != nil {
+		return 0, fmt.Errorf("expire orders: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE showtime_seats SET status='AVAILABLE', hold_order_id=NULL, hold_expires_at=NULL, updated_at=now() WHERE hold_order_id=ANY($1::uuid[]) AND status='HELD'`, ids); err != nil {
+		return 0, fmt.Errorf("release expired seats: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit expiry: %w", err)
+	}
+	return len(ids), nil
+}
+
 type queryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -186,6 +299,42 @@ ORDER BY showtime_seat_id`, order.ID)
 			return booking.Order{}, err
 		}
 		order.Items = append(order.Items, booking.OrderItem{SeatID: seatID})
+	}
+	if err := rows.Err(); err != nil {
+		return booking.Order{}, err
+	}
+	if err := queryer.QueryRow(ctx, `SELECT m.title, c.name, c.city, st.name, sh.starts_at, sh.ends_at FROM showtimes sh JOIN movies m ON m.id=sh.movie_id JOIN studios st ON st.id=sh.studio_id JOIN cinemas c ON c.id=st.cinema_id WHERE sh.id=$1`, order.ShowtimeID).Scan(&order.Showtime.MovieTitle, &order.Showtime.CinemaName, &order.Showtime.CinemaCity, &order.Showtime.StudioName, &order.Showtime.StartsAt, &order.Showtime.EndsAt); err != nil {
+		return booking.Order{}, err
+	}
+	order.Showtime.ID = order.ShowtimeID
+	var payment booking.PaymentSummary
+	var paidAt *time.Time
+	err = queryer.QueryRow(ctx, `SELECT provider, provider_reference, status, amount::text, currency::text, paid_at FROM payments WHERE order_id=$1 ORDER BY created_at DESC LIMIT 1`, order.ID).Scan(&payment.Provider, &payment.Reference, &payment.Status, &payment.Amount, &payment.Currency, &paidAt)
+	if err == nil {
+		payment.PaidAt = paidAt
+		order.Payment = &payment
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return booking.Order{}, err
+	}
+	return order, nil
+}
+
+func findOrderByID(ctx context.Context, queryer queryer, orderID, userID string) (booking.Order, error) {
+	var order booking.Order
+	if err := queryer.QueryRow(ctx, `SELECT id::text, user_id::text, showtime_id::text, idempotency_key, status, expires_at, created_at FROM orders WHERE id=$1 AND user_id=$2`, orderID, userID).Scan(&order.ID, &order.UserID, &order.ShowtimeID, &order.IdempotencyKey, &order.Status, &order.ExpiresAt, &order.CreatedAt); err != nil {
+		return booking.Order{}, err
+	}
+	rows, err := queryer.Query(ctx, `SELECT oi.id::text, ss.seat_id::text, oi.price_amount::text, oi.currency::text, COALESCE(t.status, '') FROM order_items oi JOIN showtime_seats ss ON ss.id=oi.showtime_seat_id LEFT JOIN tickets t ON t.order_item_id=oi.id WHERE oi.order_id=$1 ORDER BY oi.id`, order.ID)
+	if err != nil {
+		return booking.Order{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item booking.OrderItem
+		if err := rows.Scan(&item.ID, &item.SeatID, &item.PriceAmount, &item.Currency, &item.TicketState); err != nil {
+			return booking.Order{}, err
+		}
+		order.Items = append(order.Items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return booking.Order{}, err

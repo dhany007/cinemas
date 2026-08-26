@@ -125,6 +125,9 @@ func newServer(
 				server.requireRole(authenticationService, auth.RoleCustomer, server.createOrderHold(bookingService)),
 			),
 		)
+		e.GET("/v1/orders", server.requireRole(authenticationService, auth.RoleCustomer, server.listOrders(bookingService)))
+		e.GET("/v1/orders/:orderID", server.requireRole(authenticationService, auth.RoleCustomer, server.getOrder(bookingService)))
+		e.POST("/v1/orders/:orderID/cancel", server.requireRole(authenticationService, auth.RoleCustomer, server.cancelOrder(bookingService)))
 	}
 	if paymentService != nil {
 		paymentHandler := server.createFakePayment(paymentService)
@@ -194,6 +197,43 @@ type orderResponse struct {
 	Status    booking.OrderStatus `json:"status"`
 	ExpiresAt string              `json:"expires_at"`
 	SeatIDs   []string            `json:"seat_ids"`
+}
+
+type orderListResponse struct {
+	Orders []orderDetailResponse `json:"orders"`
+}
+type orderDetailResponse struct {
+	ID        string                `json:"id"`
+	Status    booking.OrderStatus   `json:"status"`
+	ExpiresAt string                `json:"expires_at"`
+	Items     []orderItemResponse   `json:"items"`
+	Showtime  orderShowtimeResponse `json:"showtime"`
+	Payment   *orderPaymentResponse `json:"payment"`
+}
+
+type orderItemResponse struct {
+	ID          string `json:"id"`
+	SeatID      string `json:"seat_id"`
+	PriceAmount string `json:"price_amount"`
+	Currency    string `json:"currency"`
+	TicketState string `json:"ticket_state"`
+}
+type orderShowtimeResponse struct {
+	ID         string `json:"id"`
+	MovieTitle string `json:"movie_title"`
+	CinemaName string `json:"cinema_name"`
+	CinemaCity string `json:"cinema_city"`
+	StudioName string `json:"studio_name"`
+	StartsAt   string `json:"starts_at"`
+	EndsAt     string `json:"ends_at"`
+}
+type orderPaymentResponse struct {
+	Provider  string `json:"provider"`
+	Reference string `json:"reference"`
+	Status    string `json:"status"`
+	Amount    string `json:"amount"`
+	Currency  string `json:"currency"`
+	PaidAt    string `json:"paid_at,omitempty"`
 }
 
 type errorResponse struct {
@@ -394,6 +434,90 @@ func (s *Server) createOrderHold(service *booking.Service) echo.HandlerFunc {
 			ExpiresAt: order.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 			SeatIDs:   seatIDs,
 		})
+	}
+}
+
+func (s *Server) getOrder(service *booking.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		orderID := c.Param("orderID")
+		if !isUUID(orderID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "order ID must be a UUID")
+		}
+		order, err := service.GetOrder(c.Request().Context(), orderID, identity.UserID)
+		if err != nil {
+			return writeOrderError(c, err)
+		}
+		return c.JSON(http.StatusOK, toOrderDetailResponse(order))
+	}
+}
+
+func (s *Server) listOrders(service *booking.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		orders, err := service.ListOrders(c.Request().Context(), identity.UserID)
+		if err != nil {
+			return writeOrderError(c, err)
+		}
+		response := make([]orderDetailResponse, len(orders))
+		for i, order := range orders {
+			response[i] = toOrderDetailResponse(order)
+		}
+		return c.JSON(http.StatusOK, orderListResponse{Orders: response})
+	}
+}
+
+func (s *Server) cancelOrder(service *booking.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		orderID := c.Param("orderID")
+		if !isUUID(orderID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "order ID must be a UUID")
+		}
+		order, err := service.CancelOrder(c.Request().Context(), orderID, identity.UserID)
+		if err != nil {
+			return writeOrderError(c, err)
+		}
+		return c.JSON(http.StatusOK, toOrderDetailResponse(order))
+	}
+}
+
+func toOrderDetailResponse(order booking.Order) orderDetailResponse {
+	items := make([]orderItemResponse, len(order.Items))
+	for i, item := range order.Items {
+		items[i] = orderItemResponse{ID: item.ID, SeatID: item.SeatID, PriceAmount: item.PriceAmount, Currency: item.Currency, TicketState: item.TicketState}
+	}
+	response := orderDetailResponse{ID: order.ID, Status: order.Status, ExpiresAt: order.ExpiresAt.Format(time.RFC3339), Items: items, Showtime: orderShowtimeResponse{ID: order.Showtime.ID, MovieTitle: order.Showtime.MovieTitle, CinemaName: order.Showtime.CinemaName, CinemaCity: order.Showtime.CinemaCity, StudioName: order.Showtime.StudioName, StartsAt: order.Showtime.StartsAt.Format(time.RFC3339), EndsAt: order.Showtime.EndsAt.Format(time.RFC3339)}}
+	if response.Showtime.ID == "" {
+		response.Showtime.ID = order.ShowtimeID
+	}
+	if order.Payment != nil {
+		payment := orderPaymentResponse{Provider: order.Payment.Provider, Reference: order.Payment.Reference, Status: order.Payment.Status, Amount: order.Payment.Amount, Currency: order.Payment.Currency}
+		if order.Payment.PaidAt != nil {
+			payment.PaidAt = order.Payment.PaidAt.Format(time.RFC3339)
+		}
+		response.Payment = &payment
+	}
+	return response
+}
+
+func writeOrderError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, booking.ErrOrderNotFound):
+		return writeError(c, http.StatusNotFound, "ORDER_NOT_FOUND", "order was not found")
+	case errors.Is(err, booking.ErrOrderNotCancellable):
+		return writeError(c, http.StatusConflict, "ORDER_NOT_CANCELLABLE", "order can no longer be cancelled")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to manage order")
 	}
 }
 

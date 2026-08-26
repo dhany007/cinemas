@@ -2,6 +2,7 @@ package booking
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -10,6 +11,7 @@ import (
 type MemoryRepository struct {
 	mu                  sync.RWMutex
 	seats               map[string]Seat
+	orders              map[string]Order
 	ordersByIdempotency map[string]Order
 }
 
@@ -17,6 +19,7 @@ type MemoryRepository struct {
 func NewMemoryRepository(seats []Seat) *MemoryRepository {
 	repository := &MemoryRepository{
 		seats:               make(map[string]Seat, len(seats)),
+		orders:              make(map[string]Order),
 		ordersByIdempotency: make(map[string]Order),
 	}
 	for _, seat := range seats {
@@ -66,7 +69,60 @@ func (r *MemoryRepository) CreateHold(ctx context.Context, order Order, now time
 		r.seats[item.SeatID] = seat
 	}
 	r.ordersByIdempotency[key] = copyOrder(order)
+	r.orders[order.ID] = copyOrder(order)
 	return copyOrder(order), nil
+}
+
+func (r *MemoryRepository) FindOrder(_ context.Context, orderID, userID string) (Order, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	order, found := r.orders[orderID]
+	if !found || order.UserID != userID {
+		return Order{}, ErrOrderNotFound
+	}
+	return copyOrder(order), nil
+}
+
+func (r *MemoryRepository) ListOrders(_ context.Context, userID string) ([]Order, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	orders := make([]Order, 0)
+	for _, order := range r.orders {
+		if order.UserID == userID {
+			orders = append(orders, copyOrder(order))
+		}
+	}
+	sort.Slice(orders, func(i, j int) bool { return orders[i].CreatedAt.After(orders[j].CreatedAt) })
+	return orders, nil
+}
+
+func (r *MemoryRepository) CancelOrder(ctx context.Context, orderID, userID string, now time.Time) (Order, error) {
+	if err := ctx.Err(); err != nil {
+		return Order{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.expireLocked(now, len(r.orders))
+	order, found := r.orders[orderID]
+	if !found || order.UserID != userID {
+		return Order{}, ErrOrderNotFound
+	}
+	if order.Status != OrderPendingPayment {
+		return Order{}, ErrOrderNotCancellable
+	}
+	order.Status = OrderCancelled
+	r.releaseLocked(order.ID)
+	r.storeLocked(order)
+	return copyOrder(order), nil
+}
+
+func (r *MemoryRepository) ExpirePendingHolds(ctx context.Context, now time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.expireLocked(now, limit), nil
 }
 
 // Seat returns the current state of a test seat.
@@ -75,6 +131,42 @@ func (r *MemoryRepository) Seat(id string) (Seat, bool) {
 	defer r.mu.RUnlock()
 	seat, ok := r.seats[id]
 	return seat, ok
+}
+
+func (r *MemoryRepository) expireLocked(now time.Time, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	orders := make([]Order, 0)
+	for _, order := range r.orders {
+		if order.Status == OrderPendingPayment && !order.ExpiresAt.After(now) {
+			orders = append(orders, order)
+		}
+	}
+	sort.Slice(orders, func(i, j int) bool { return orders[i].ExpiresAt.Before(orders[j].ExpiresAt) })
+	if len(orders) > limit {
+		orders = orders[:limit]
+	}
+	for _, order := range orders {
+		order.Status = OrderExpired
+		r.releaseLocked(order.ID)
+		r.storeLocked(order)
+	}
+	return len(orders)
+}
+
+func (r *MemoryRepository) releaseLocked(orderID string) {
+	for id, seat := range r.seats {
+		if seat.Status == SeatHeld && seat.HoldOrderID == orderID {
+			seat.Status, seat.HoldOrderID, seat.HoldExpiresAt = SeatAvailable, "", time.Time{}
+			r.seats[id] = seat
+		}
+	}
+}
+
+func (r *MemoryRepository) storeLocked(order Order) {
+	r.orders[order.ID] = copyOrder(order)
+	r.ordersByIdempotency[idempotencyMapKey(order.UserID, order.IdempotencyKey)] = copyOrder(order)
 }
 
 func isAvailableForHold(seat Seat, now time.Time) bool {
@@ -95,5 +187,9 @@ func orderSeatIDs(order Order) []string {
 
 func copyOrder(order Order) Order {
 	order.Items = append([]OrderItem(nil), order.Items...)
+	if order.Payment != nil {
+		payment := *order.Payment
+		order.Payment = &payment
+	}
 	return order
 }

@@ -12,6 +12,8 @@ var (
 	ErrSeatUnavailable = errors.New("seat unavailable")
 	// ErrIdempotencyKeyReused indicates the same key was sent with a different request.
 	ErrIdempotencyKeyReused = errors.New("idempotency key reused with different request")
+	ErrOrderNotFound        = errors.New("order not found")
+	ErrOrderNotCancellable  = errors.New("order is not cancellable")
 )
 
 // SeatStatus describes a seat's availability for one showtime.
@@ -32,6 +34,9 @@ type OrderStatus string
 const (
 	// OrderPendingPayment means the selected seats are held awaiting payment.
 	OrderPendingPayment OrderStatus = "PENDING_PAYMENT"
+	OrderPaid           OrderStatus = "PAID"
+	OrderExpired        OrderStatus = "EXPIRED"
+	OrderCancelled      OrderStatus = "CANCELLED"
 )
 
 // Seat is the inventory state of a seat for a specific showtime.
@@ -45,7 +50,30 @@ type Seat struct {
 
 // OrderItem records a single held seat in an order.
 type OrderItem struct {
-	SeatID string
+	ID          string
+	SeatID      string
+	PriceAmount string
+	Currency    string
+	TicketState string
+}
+
+type ShowtimeSummary struct {
+	ID         string
+	MovieTitle string
+	CinemaName string
+	CinemaCity string
+	StudioName string
+	StartsAt   time.Time
+	EndsAt     time.Time
+}
+
+type PaymentSummary struct {
+	Provider  string
+	Reference string
+	Status    string
+	Amount    string
+	Currency  string
+	PaidAt    *time.Time
 }
 
 // Order is a pending or completed ticket booking.
@@ -56,7 +84,10 @@ type Order struct {
 	IdempotencyKey string
 	Status         OrderStatus
 	ExpiresAt      time.Time
+	CreatedAt      time.Time
 	Items          []OrderItem
+	Showtime       ShowtimeSummary
+	Payment        *PaymentSummary
 }
 
 // CreateHoldInput contains the caller-supplied values for a seat hold.

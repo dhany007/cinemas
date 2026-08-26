@@ -54,11 +54,11 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 **Goal:** complete the customer-side order lifecycle around the existing hold.
 
-- [ ] Add `GET /v1/orders/{orderId}` with owner-only access.
-- [ ] Add `GET /v1/orders` for the authenticated customer's order history.
-- [ ] Return ordered items, showtime summary, payment state, ticket state, and hold expiry without leaking another customer's data.
-- [ ] Implement pending-hold expiry processing that marks orders expired and releases seats.
-- [ ] Add cancellation rules for unpaid holds, if still allowed before expiry.
+- [x] Add `GET /v1/orders/{orderId}` with owner-only access.
+- [x] Add `GET /v1/orders` for the authenticated customer's order history.
+- [x] Return ordered items, showtime summary, payment state, ticket state, and hold expiry without leaking another customer's data.
+- [x] Implement pending-hold expiry processing that marks orders expired and releases seats.
+- [x] Add cancellation rules for unpaid holds, if still allowed before expiry.
 - [ ] Add PostgreSQL concurrency tests for duplicate requests, competing seat selections, and hold expiry.
 
 **Done when:** customers can view the result of every checkout attempt, expired holds release inventory, and concurrent access has database-backed tests.

@@ -24,6 +24,10 @@ const (
 type Repository interface {
 	FindOrderByIdempotency(ctx context.Context, userID, key string) (Order, bool, error)
 	CreateHold(ctx context.Context, order Order, now time.Time) (Order, error)
+	FindOrder(ctx context.Context, orderID, userID string) (Order, error)
+	ListOrders(ctx context.Context, userID string) ([]Order, error)
+	CancelOrder(ctx context.Context, orderID, userID string, now time.Time) (Order, error)
+	ExpirePendingHolds(ctx context.Context, now time.Time, limit int) (int, error)
 }
 
 // Service applies the business rules for booking seat holds.
@@ -79,6 +83,7 @@ func (s *Service) CreateHold(ctx context.Context, input CreateHoldInput) (Order,
 		IdempotencyKey: input.IdempotencyKey,
 		Status:         OrderPendingPayment,
 		ExpiresAt:      now.Add(s.holdDuration),
+		CreatedAt:      now,
 		Items:          makeOrderItems(seatIDs),
 	}
 
@@ -87,6 +92,62 @@ func (s *Service) CreateHold(ctx context.Context, input CreateHoldInput) (Order,
 		return Order{}, fmt.Errorf("create seat hold: %w", err)
 	}
 	return created, nil
+}
+
+func (s *Service) GetOrder(ctx context.Context, orderID, userID string) (Order, error) {
+	if err := ctx.Err(); err != nil {
+		return Order{}, err
+	}
+	if strings.TrimSpace(orderID) == "" || strings.TrimSpace(userID) == "" {
+		return Order{}, ErrOrderNotFound
+	}
+	order, err := s.repository.FindOrder(ctx, strings.TrimSpace(orderID), strings.TrimSpace(userID))
+	if err != nil {
+		return Order{}, fmt.Errorf("find customer order: %w", err)
+	}
+	return order, nil
+}
+
+func (s *Service) ListOrders(ctx context.Context, userID string) ([]Order, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, ErrOrderNotFound
+	}
+	orders, err := s.repository.ListOrders(ctx, strings.TrimSpace(userID))
+	if err != nil {
+		return nil, fmt.Errorf("list customer orders: %w", err)
+	}
+	return orders, nil
+}
+
+func (s *Service) CancelOrder(ctx context.Context, orderID, userID string) (Order, error) {
+	if err := ctx.Err(); err != nil {
+		return Order{}, err
+	}
+	if strings.TrimSpace(orderID) == "" || strings.TrimSpace(userID) == "" {
+		return Order{}, ErrOrderNotFound
+	}
+	order, err := s.repository.CancelOrder(ctx, strings.TrimSpace(orderID), strings.TrimSpace(userID), s.clock().UTC())
+	if err != nil {
+		return Order{}, fmt.Errorf("cancel customer order: %w", err)
+	}
+	return order, nil
+}
+
+func (s *Service) ExpirePendingHolds(ctx context.Context, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, nil
+	}
+	expired, err := s.repository.ExpirePendingHolds(ctx, s.clock().UTC(), limit)
+	if err != nil {
+		return 0, fmt.Errorf("expire pending holds: %w", err)
+	}
+	return expired, nil
 }
 
 func validateAndSortSeatIDs(input CreateHoldInput) ([]string, error) {
