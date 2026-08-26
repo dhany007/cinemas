@@ -392,3 +392,133 @@ func isForeignKeyViolation(err error) bool {
 	var databaseError *pgconn.PgError
 	return errors.As(err, &databaseError) && databaseError.Code == "23503"
 }
+
+// CreateMovie stores a movie and its audit event atomically.
+func (r *AdminRepository) CreateMovie(
+	ctx context.Context,
+	movie admin.Movie,
+	audit admin.AuditEvent,
+) (admin.Movie, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Movie{}, fmt.Errorf("begin movie create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO movies (id, title, duration_minutes, rating, synopsis, poster_url, release_date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		movie.ID,
+		movie.Title,
+		movie.DurationMinutes,
+		movie.Rating,
+		movie.Synopsis,
+		movie.PosterURL,
+		movie.ReleaseDate,
+	); err != nil {
+		return admin.Movie{}, fmt.Errorf("insert movie: %w", err)
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Movie{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Movie{}, fmt.Errorf("commit movie create: %w", err)
+	}
+	return movie, nil
+}
+
+// ListMovies returns movies in deterministic title and ID order.
+func (r *AdminRepository) ListMovies(ctx context.Context) ([]admin.Movie, error) {
+	rows, err := r.pool.Query(
+		ctx,
+		`SELECT id::text, title, duration_minutes, rating, synopsis, poster_url, release_date::text
+		 FROM movies ORDER BY title, id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list movies: %w", err)
+	}
+	defer rows.Close()
+	var movies []admin.Movie
+	for rows.Next() {
+		var movie admin.Movie
+		if err := rows.Scan(
+			&movie.ID,
+			&movie.Title,
+			&movie.DurationMinutes,
+			&movie.Rating,
+			&movie.Synopsis,
+			&movie.PosterURL,
+			&movie.ReleaseDate,
+		); err != nil {
+			return nil, fmt.Errorf("scan movie: %w", err)
+		}
+		movies = append(movies, movie)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate movies: %w", err)
+	}
+	return movies, nil
+}
+
+// UpdateMovie replaces a movie and its audit event atomically.
+func (r *AdminRepository) UpdateMovie(
+	ctx context.Context,
+	movie admin.Movie,
+	audit admin.AuditEvent,
+) (admin.Movie, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Movie{}, fmt.Errorf("begin movie update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(
+		ctx,
+		`UPDATE movies
+		 SET title = $2, duration_minutes = $3, rating = $4, synopsis = $5, poster_url = $6, release_date = $7,
+		     updated_at = now()
+		 WHERE id = $1`,
+		movie.ID,
+		movie.Title,
+		movie.DurationMinutes,
+		movie.Rating,
+		movie.Synopsis,
+		movie.PosterURL,
+		movie.ReleaseDate,
+	)
+	if err != nil {
+		return admin.Movie{}, fmt.Errorf("update movie: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.Movie{}, admin.ErrMovieNotFound
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Movie{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Movie{}, fmt.Errorf("commit movie update: %w", err)
+	}
+	return movie, nil
+}
+
+// DeleteMovie removes a movie and creates its audit event atomically.
+func (r *AdminRepository) DeleteMovie(ctx context.Context, id string, audit admin.AuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin movie delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `DELETE FROM movies WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete movie: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.ErrMovieNotFound
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit movie delete: %w", err)
+	}
+	return nil
+}

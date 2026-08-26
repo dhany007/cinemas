@@ -168,6 +168,10 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 	s.e.POST("/v1/admin/seats", s.requireRole(authenticationService, auth.RoleAdmin, s.createSeat(service)))
 	s.e.PATCH("/v1/admin/seats/:seatID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateSeat(service)))
 	s.e.DELETE("/v1/admin/seats/:seatID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteSeat(service)))
+	s.e.GET("/v1/admin/movies", s.requireRole(authenticationService, auth.RoleAdmin, s.listAdminMovies(service)))
+	s.e.POST("/v1/admin/movies", s.requireRole(authenticationService, auth.RoleAdmin, s.createMovie(service)))
+	s.e.PATCH("/v1/admin/movies/:movieID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateMovie(service)))
+	s.e.DELETE("/v1/admin/movies/:movieID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteMovie(service)))
 }
 
 type createOrderRequest struct {
@@ -230,6 +234,14 @@ type seatLayoutResponse struct {
 }
 type seatLayoutListResponse struct {
 	Seats []seatLayoutResponse `json:"seats"`
+}
+type adminMovieRequest struct {
+	Title           string  `json:"title"`
+	DurationMinutes int     `json:"duration_minutes"`
+	Rating          *string `json:"rating"`
+	Synopsis        *string `json:"synopsis"`
+	PosterURL       *string `json:"poster_url"`
+	ReleaseDate     *string `json:"release_date"`
 }
 
 type seatMapResponse struct {
@@ -681,6 +693,130 @@ func writeSeatError(c echo.Context, err error, operation string) error {
 		return writeError(c, http.StatusConflict, "SEAT_ALREADY_EXISTS", "seat position already exists in this studio")
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" seat")
+	}
+}
+
+func (s *Server) createMovie(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request adminMovieRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		movie, err := service.CreateMovie(c.Request().Context(), toCreateMovieInput(identity.UserID, request))
+		if err != nil {
+			return writeMovieError(c, err, "create")
+		}
+		return c.JSON(http.StatusCreated, toAdminMovieResponse(movie))
+	}
+}
+
+func (s *Server) listAdminMovies(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		movies, err := service.ListMovies(c.Request().Context())
+		if err != nil {
+			return writeMovieError(c, err, "list")
+		}
+		response := make([]movieResponse, len(movies))
+		for i, movie := range movies {
+			response[i] = toAdminMovieResponse(movie)
+		}
+		return c.JSON(http.StatusOK, movieListResponse{Movies: response})
+	}
+}
+
+func (s *Server) updateMovie(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		movieID, err := movieIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request adminMovieRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		input := toCreateMovieInput(identity.UserID, request)
+		movie, err := service.UpdateMovie(c.Request().Context(), adminservice.UpdateMovieInput{
+			ActorUserID:     input.ActorUserID,
+			ID:              movieID,
+			Title:           input.Title,
+			DurationMinutes: input.DurationMinutes,
+			Rating:          input.Rating,
+			Synopsis:        input.Synopsis,
+			PosterURL:       input.PosterURL,
+			ReleaseDate:     input.ReleaseDate,
+		})
+		if err != nil {
+			return writeMovieError(c, err, "update")
+		}
+		return c.JSON(http.StatusOK, toAdminMovieResponse(movie))
+	}
+}
+
+func (s *Server) deleteMovie(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		movieID, err := movieIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		if err := service.DeleteMovie(c.Request().Context(), identity.UserID, movieID); err != nil {
+			return writeMovieError(c, err, "delete")
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func movieIDParam(c echo.Context) (string, error) {
+	movieID := c.Param("movieID")
+	if !isUUID(movieID) {
+		return "", writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "movie ID must be a UUID")
+	}
+	return movieID, nil
+}
+
+func toCreateMovieInput(actorUserID string, request adminMovieRequest) adminservice.CreateMovieInput {
+	return adminservice.CreateMovieInput{
+		ActorUserID:     actorUserID,
+		Title:           request.Title,
+		DurationMinutes: request.DurationMinutes,
+		Rating:          request.Rating,
+		Synopsis:        request.Synopsis,
+		PosterURL:       request.PosterURL,
+		ReleaseDate:     request.ReleaseDate,
+	}
+}
+
+func toAdminMovieResponse(movie adminservice.Movie) movieResponse {
+	return movieResponse{
+		ID:              movie.ID,
+		Title:           movie.Title,
+		DurationMinutes: movie.DurationMinutes,
+		Rating:          movie.Rating,
+		Synopsis:        movie.Synopsis,
+		PosterURL:       movie.PosterURL,
+		ReleaseDate:     movie.ReleaseDate,
+	}
+}
+
+func writeMovieError(c echo.Context, err error, operation string) error {
+	switch {
+	case errors.Is(err, adminservice.ErrInvalidMovieInput):
+		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "movie metadata is invalid")
+	case errors.Is(err, adminservice.ErrMovieNotFound):
+		return writeError(c, http.StatusNotFound, "MOVIE_NOT_FOUND", "movie was not found")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" movie")
 	}
 }
 

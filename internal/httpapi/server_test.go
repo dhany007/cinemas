@@ -489,6 +489,140 @@ func TestServerRejectsDuplicateSeatLayoutPosition(t *testing.T) {
 	}
 }
 
+func TestServerAdminMovieCRUD(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email:       "movie-admin@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+	body := `{"title":"Example Movie","duration_minutes":120,"rating":"PG-13",` +
+		`"synopsis":"A thrilling adventure.","poster_url":"https://example.com/poster.jpg",` +
+		`"release_date":"2026-08-26"}`
+	createRecorder := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/movies", body, adminSession.AccessToken)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created movie: %v", err)
+	}
+	if !isUUID(created.ID) {
+		t.Fatalf("created movie ID = %q, want UUID", created.ID)
+	}
+
+	listRecorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/movies", "", adminSession.AccessToken)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	if want := `"title":"Example Movie"`; !bytes.Contains(listRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("list body = %s, want %s", listRecorder.Body.String(), want)
+	}
+
+	updateBody := `{"title":"Example Movie: Director's Cut","duration_minutes":130,` +
+		`"rating":"PG-13","synopsis":"Updated adventure.",` +
+		`"poster_url":"https://example.com/poster.jpg","release_date":"2026-08-27"}`
+	updateRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPatch,
+		"/v1/admin/movies/"+created.ID,
+		updateBody,
+		adminSession.AccessToken,
+	)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body = %s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	if want := `"duration_minutes":130`; !bytes.Contains(updateRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("update body = %s, want %s", updateRecorder.Body.String(), want)
+	}
+
+	deleteRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodDelete,
+		"/v1/admin/movies/"+created.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body = %s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+func TestServerRejectsCustomerMovieManagement(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	customerSession, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email:       "movie-customer@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Customer",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+
+	recorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/movies", "", customerSession.AccessToken)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if want := `"code":"FORBIDDEN"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerRejectsInvalidMovieMetadata(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email:       "invalid-movie-admin@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+
+	recorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/movies",
+		`{"title":"Example Movie","duration_minutes":0}`,
+		adminSession.AccessToken,
+	)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
 func createAdminCinema(t *testing.T, server *Server, accessToken string) cinemaResponse {
 	t.Helper()
 	recorder := serveAdminCinemaRequest(

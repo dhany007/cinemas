@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
 )
 
 const (
@@ -177,6 +179,44 @@ func (s *Service) DeleteSeat(ctx context.Context, actorUserID, id string) error 
 	})
 }
 
+// CreateMovie validates, creates, and audits a movie.
+func (s *Service) CreateMovie(ctx context.Context, input CreateMovieInput) (Movie, error) {
+	return s.saveMovie(ctx, "", input, "CREATE")
+}
+
+// ListMovies returns all configured movies.
+func (s *Service) ListMovies(ctx context.Context) ([]Movie, error) {
+	return s.repository.ListMovies(ctx)
+}
+
+// UpdateMovie replaces a movie and records an audit event.
+func (s *Service) UpdateMovie(ctx context.Context, input UpdateMovieInput) (Movie, error) {
+	return s.saveMovie(ctx, input.ID, CreateMovieInput{
+		ActorUserID:     input.ActorUserID,
+		Title:           input.Title,
+		DurationMinutes: input.DurationMinutes,
+		Rating:          input.Rating,
+		Synopsis:        input.Synopsis,
+		PosterURL:       input.PosterURL,
+		ReleaseDate:     input.ReleaseDate,
+	}, "UPDATE")
+}
+
+// DeleteMovie removes a movie and records an audit event.
+func (s *Service) DeleteMovie(ctx context.Context, actorUserID, id string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	id = strings.TrimSpace(id)
+	if actorUserID == "" || id == "" {
+		return ErrInvalidMovieInput
+	}
+	return s.repository.DeleteMovie(ctx, id, AuditEvent{
+		ActorUserID: actorUserID,
+		EntityType:  "MOVIE",
+		EntityID:    id,
+		Action:      "DELETE",
+	})
+}
+
 func (s *Service) saveStudio(ctx context.Context, id, actorID, cinemaID, name, action string) (Studio, error) {
 	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(cinemaID) == "" || strings.TrimSpace(name) == "" {
 		return Studio{}, ErrInvalidCinemaInput
@@ -222,6 +262,81 @@ func (s *Service) saveSeat(
 		return s.repository.CreateSeat(ctx, seat, audit)
 	}
 	return s.repository.UpdateSeat(ctx, seat, audit)
+}
+
+func (s *Service) saveMovie(ctx context.Context, id string, input CreateMovieInput, action string) (Movie, error) {
+	actorUserID := strings.TrimSpace(input.ActorUserID)
+	id = strings.TrimSpace(id)
+	title := strings.TrimSpace(input.Title)
+	if actorUserID == "" || title == "" || input.DurationMinutes <= 0 || action == "UPDATE" && id == "" {
+		return Movie{}, ErrInvalidMovieInput
+	}
+	rating := optionalString(input.Rating)
+	synopsis := optionalString(input.Synopsis)
+	posterURL, err := optionalPosterURL(input.PosterURL)
+	if err != nil {
+		return Movie{}, ErrInvalidMovieInput
+	}
+	releaseDate, err := optionalReleaseDate(input.ReleaseDate)
+	if err != nil {
+		return Movie{}, ErrInvalidMovieInput
+	}
+	if id == "" {
+		id, err = s.newID()
+		if err != nil {
+			return Movie{}, fmt.Errorf("generate movie id: %w", err)
+		}
+	}
+	movie := Movie{
+		ID:              id,
+		Title:           title,
+		DurationMinutes: input.DurationMinutes,
+		Rating:          rating,
+		Synopsis:        synopsis,
+		PosterURL:       posterURL,
+		ReleaseDate:     releaseDate,
+	}
+	audit := AuditEvent{ActorUserID: actorUserID, EntityType: "MOVIE", EntityID: id, Action: action}
+	if action == "CREATE" {
+		return s.repository.CreateMovie(ctx, movie, audit)
+	}
+	return s.repository.UpdateMovie(ctx, movie, audit)
+}
+
+func optionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func optionalPosterURL(value *string) (*string, error) {
+	posterURL := optionalString(value)
+	if posterURL == nil {
+		return nil, nil
+	}
+	parsedURL, err := url.ParseRequestURI(*posterURL)
+	if err != nil || !parsedURL.IsAbs() {
+		return nil, ErrInvalidMovieInput
+	}
+	return posterURL, nil
+}
+
+func optionalReleaseDate(value *string) (*string, error) {
+	releaseDate := optionalString(value)
+	if releaseDate == nil {
+		return nil, nil
+	}
+	date, err := time.Parse(time.DateOnly, *releaseDate)
+	if err != nil {
+		return nil, ErrInvalidMovieInput
+	}
+	normalized := date.Format(time.DateOnly)
+	return &normalized, nil
 }
 
 func newCinemaID() (string, error) {

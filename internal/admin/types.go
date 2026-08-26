@@ -18,6 +18,10 @@ var (
 	ErrSeatNotFound = errors.New("seat not found")
 	// ErrSeatAlreadyExists indicates a studio already has the row and seat number.
 	ErrSeatAlreadyExists = errors.New("seat already exists")
+	// ErrInvalidMovieInput indicates invalid required or optional movie metadata.
+	ErrInvalidMovieInput = errors.New("invalid movie input")
+	// ErrMovieNotFound indicates a movie does not exist.
+	ErrMovieNotFound = errors.New("movie not found")
 )
 
 // Cinema is an administrator-managed cinema location.
@@ -38,6 +42,17 @@ type Seat struct {
 	RowLabel   string
 	SeatNumber string
 	SeatType   string
+}
+
+// Movie is administrator-managed film metadata.
+type Movie struct {
+	ID              string
+	Title           string
+	DurationMinutes int
+	Rating          *string
+	Synopsis        *string
+	PosterURL       *string
+	ReleaseDate     *string
 }
 
 // AuditEvent records a privileged administrative action.
@@ -90,6 +105,29 @@ type UpdateSeatInput struct {
 	SeatType    string
 }
 
+// CreateMovieInput contains data for an administrator-created movie.
+type CreateMovieInput struct {
+	ActorUserID     string
+	Title           string
+	DurationMinutes int
+	Rating          *string
+	Synopsis        *string
+	PosterURL       *string
+	ReleaseDate     *string
+}
+
+// UpdateMovieInput contains replacement data for a movie.
+type UpdateMovieInput struct {
+	ActorUserID     string
+	ID              string
+	Title           string
+	DurationMinutes int
+	Rating          *string
+	Synopsis        *string
+	PosterURL       *string
+	ReleaseDate     *string
+}
+
 // Repository persists cinema data and its matching audit event atomically.
 type Repository interface {
 	CreateCinema(context.Context, Cinema, AuditEvent) (Cinema, error)
@@ -105,4 +143,8 @@ type Repository interface {
 	ListSeats(context.Context) ([]Seat, error)
 	UpdateSeat(context.Context, Seat, AuditEvent) (Seat, error)
 	DeleteSeat(context.Context, string, AuditEvent) error
+	CreateMovie(context.Context, Movie, AuditEvent) (Movie, error)
+	ListMovies(context.Context) ([]Movie, error)
+	UpdateMovie(context.Context, Movie, AuditEvent) (Movie, error)
+	DeleteMovie(context.Context, string, AuditEvent) error
 }

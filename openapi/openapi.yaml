@@ -198,6 +198,45 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/SeatNotFound'}
+  /v1/admin/movies:
+    get:
+      summary: List administrator-managed movies
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Movies in deterministic title and ID order, content: {application/json: {schema: {$ref: '#/components/schemas/AdminMovieList'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a movie
+      security: [{bearerAuth: []}]
+      requestBody: {$ref: '#/components/requestBodies/AdminMovieWrite'}
+      responses:
+        '201': {description: Movie created, content: {application/json: {schema: {$ref: '#/components/schemas/Movie'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/admin/movies/{movieID}:
+    patch:
+      summary: Replace a movie
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/MovieID'}]
+      requestBody: {$ref: '#/components/requestBodies/AdminMovieWrite'}
+      responses:
+        '200': {description: Movie updated, content: {application/json: {schema: {$ref: '#/components/schemas/Movie'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/MovieNotFound'}
+    delete:
+      summary: Delete a movie without dependent showtimes
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/MovieID'}]
+      responses:
+        '204': {description: Movie deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/MovieNotFound'}
   /v1/movies:
     get:
       summary: List public movies
@@ -372,6 +411,20 @@ components:
               row_label: {type: string, minLength: 1}
               seat_number: {type: string, minLength: 1}
               seat_type: {type: string, minLength: 1}
+    AdminMovieWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [title, duration_minutes]
+            properties:
+              title: {type: string, minLength: 1}
+              duration_minutes: {type: integer, minimum: 1}
+              rating: {type: string}
+              synopsis: {type: string}
+              poster_url: {type: string, format: uri}
+              release_date: {type: string, format: date}
   responses:
     SessionCreated: {description: Account created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
     Session: {description: Authenticated session, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
@@ -426,6 +479,13 @@ components:
         synopsis: {type: string}
         poster_url: {type: string, format: uri}
         release_date: {type: string, format: date}
+    AdminMovieList:
+      type: object
+      required: [movies]
+      properties:
+        movies:
+          type: array
+          items: {$ref: '#/components/schemas/Movie'}
     Cinema:
       type: object
       required: [id, name, address, city]

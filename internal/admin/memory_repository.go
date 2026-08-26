@@ -13,6 +13,7 @@ type MemoryRepository struct {
 	cinemas map[string]Cinema
 	studios map[string]Studio
 	seats   map[string]Seat
+	movies  map[string]Movie
 }
 
 // NewMemoryRepository creates an empty test repository.
@@ -21,7 +22,70 @@ func NewMemoryRepository() *MemoryRepository {
 		cinemas: make(map[string]Cinema),
 		studios: make(map[string]Studio),
 		seats:   make(map[string]Seat),
+		movies:  make(map[string]Movie),
 	}
+}
+
+// CreateMovie stores a movie and its audit event.
+func (r *MemoryRepository) CreateMovie(ctx context.Context, movie Movie, audit AuditEvent) (Movie, error) {
+	if err := ctx.Err(); err != nil {
+		return Movie{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.movies[movie.ID] = movie
+	r.audits = append(r.audits, audit)
+	return movie, nil
+}
+
+// ListMovies returns stored movies in deterministic title and ID order.
+func (r *MemoryRepository) ListMovies(ctx context.Context) ([]Movie, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	movies := make([]Movie, 0, len(r.movies))
+	for _, movie := range r.movies {
+		movies = append(movies, movie)
+	}
+	sort.Slice(movies, func(i, j int) bool {
+		if movies[i].Title == movies[j].Title {
+			return movies[i].ID < movies[j].ID
+		}
+		return movies[i].Title < movies[j].Title
+	})
+	return movies, nil
+}
+
+// UpdateMovie replaces a movie and its audit event.
+func (r *MemoryRepository) UpdateMovie(ctx context.Context, movie Movie, audit AuditEvent) (Movie, error) {
+	if err := ctx.Err(); err != nil {
+		return Movie{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.movies[movie.ID]; !found {
+		return Movie{}, ErrMovieNotFound
+	}
+	r.movies[movie.ID] = movie
+	r.audits = append(r.audits, audit)
+	return movie, nil
+}
+
+// DeleteMovie removes a movie and records its audit event.
+func (r *MemoryRepository) DeleteMovie(ctx context.Context, id string, audit AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.movies[id]; !found {
+		return ErrMovieNotFound
+	}
+	delete(r.movies, id)
+	r.audits = append(r.audits, audit)
+	return nil
 }
 
 // CreateSeat stores a physical seat and its audit event.

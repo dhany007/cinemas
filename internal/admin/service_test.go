@@ -94,3 +94,63 @@ func TestServiceManagesSeatLayoutAndRecordsAuditEvents(t *testing.T) {
 		t.Fatalf("audit events = %#v, want cinema, studio, and seat mutations", got)
 	}
 }
+
+func TestServiceManagesMovieAndRecordsAuditEvents(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	ctx := context.Background()
+	actorUserID := "10000000-0000-4000-8000-000000000001"
+	rating := "PG-13"
+	synopsis := "A thrilling adventure."
+	posterURL := "https://example.com/poster.jpg"
+	releaseDate := "2026-08-26"
+
+	movie, err := service.CreateMovie(ctx, CreateMovieInput{
+		ActorUserID:     actorUserID,
+		Title:           "Example Movie",
+		DurationMinutes: 120,
+		Rating:          &rating,
+		Synopsis:        &synopsis,
+		PosterURL:       &posterURL,
+		ReleaseDate:     &releaseDate,
+	})
+	if err != nil {
+		t.Fatalf("CreateMovie() error = %v", err)
+	}
+	if movie.Title != "Example Movie" || movie.DurationMinutes != 120 ||
+		movie.ReleaseDate == nil || *movie.ReleaseDate != releaseDate {
+		t.Fatalf("movie = %#v, want created movie", movie)
+	}
+
+	movies, err := service.ListMovies(ctx)
+	if err != nil {
+		t.Fatalf("ListMovies() error = %v", err)
+	}
+	if len(movies) != 1 || movies[0] != movie {
+		t.Fatalf("ListMovies() = %#v, want %#v", movies, []Movie{movie})
+	}
+
+	updated, err := service.UpdateMovie(ctx, UpdateMovieInput{
+		ActorUserID:     actorUserID,
+		ID:              movie.ID,
+		Title:           "Example Movie: Director's Cut",
+		DurationMinutes: 130,
+		Rating:          &rating,
+		Synopsis:        &synopsis,
+		PosterURL:       &posterURL,
+		ReleaseDate:     &releaseDate,
+	})
+	if err != nil {
+		t.Fatalf("UpdateMovie() error = %v", err)
+	}
+	if updated.Title != "Example Movie: Director's Cut" || updated.DurationMinutes != 130 {
+		t.Fatalf("updated movie = %#v, want replacement values", updated)
+	}
+
+	if err := service.DeleteMovie(ctx, actorUserID, movie.ID); err != nil {
+		t.Fatalf("DeleteMovie() error = %v", err)
+	}
+	if got := repository.AuditEvents(); len(got) != 3 || got[0].EntityType != "MOVIE" || got[2].Action != "DELETE" {
+		t.Fatalf("audit events = %#v, want movie mutations", got)
+	}
+}
