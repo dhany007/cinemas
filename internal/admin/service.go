@@ -39,10 +39,71 @@ func (s *Service) CreateCinema(ctx context.Context, input CreateCinemaInput) (Ci
 	if err != nil {
 		return Cinema{}, fmt.Errorf("generate cinema id: %w", err)
 	}
-	cinema := Cinema{ID: id, Name: strings.TrimSpace(input.Name), Address: strings.TrimSpace(input.Address),
-		City: strings.TrimSpace(input.City)}
-	audit := AuditEvent{ActorUserID: input.ActorUserID, EntityType: "CINEMA", EntityID: id, Action: "CREATE"}
+	cinema := Cinema{
+		ID:      id,
+		Name:    strings.TrimSpace(input.Name),
+		Address: strings.TrimSpace(input.Address),
+		City:    strings.TrimSpace(input.City),
+	}
+	audit := AuditEvent{
+		ActorUserID: strings.TrimSpace(input.ActorUserID),
+		EntityType:  "CINEMA",
+		EntityID:    id,
+		Action:      "CREATE",
+	}
 	return s.repository.CreateCinema(ctx, cinema, audit)
+}
+
+// ListCinemas returns all configured cinemas.
+func (s *Service) ListCinemas(ctx context.Context) ([]Cinema, error) {
+	return s.repository.ListCinemas(ctx)
+}
+
+// FindCinema returns one cinema.
+func (s *Service) FindCinema(ctx context.Context, id string) (Cinema, error) {
+	if strings.TrimSpace(id) == "" {
+		return Cinema{}, ErrInvalidCinemaInput
+	}
+	return s.repository.FindCinema(ctx, strings.TrimSpace(id))
+}
+
+// UpdateCinema replaces a cinema and records an audit event.
+func (s *Service) UpdateCinema(ctx context.Context, input UpdateCinemaInput) (Cinema, error) {
+	actorUserID := strings.TrimSpace(input.ActorUserID)
+	id := strings.TrimSpace(input.ID)
+	if actorUserID == "" || id == "" || strings.TrimSpace(input.Name) == "" ||
+		strings.TrimSpace(input.Address) == "" || strings.TrimSpace(input.City) == "" {
+		return Cinema{}, ErrInvalidCinemaInput
+	}
+	cinema := Cinema{
+		ID:      id,
+		Name:    strings.TrimSpace(input.Name),
+		Address: strings.TrimSpace(input.Address),
+		City:    strings.TrimSpace(input.City),
+	}
+	audit := AuditEvent{
+		ActorUserID: actorUserID,
+		EntityType:  "CINEMA",
+		EntityID:    id,
+		Action:      "UPDATE",
+	}
+	return s.repository.UpdateCinema(ctx, cinema, audit)
+}
+
+// DeleteCinema removes a cinema and records an audit event.
+func (s *Service) DeleteCinema(ctx context.Context, actorUserID, id string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	id = strings.TrimSpace(id)
+	if actorUserID == "" || id == "" {
+		return ErrInvalidCinemaInput
+	}
+	audit := AuditEvent{
+		ActorUserID: actorUserID,
+		EntityType:  "CINEMA",
+		EntityID:    id,
+		Action:      "DELETE",
+	}
+	return s.repository.DeleteCinema(ctx, id, audit)
 }
 
 func newCinemaID() (string, error) {

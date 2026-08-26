@@ -5,8 +5,12 @@ import (
 	"errors"
 )
 
-// ErrInvalidCinemaInput indicates missing required cinema data.
-var ErrInvalidCinemaInput = errors.New("invalid cinema input")
+var (
+	// ErrInvalidCinemaInput indicates missing required cinema data.
+	ErrInvalidCinemaInput = errors.New("invalid cinema input")
+	// ErrCinemaNotFound indicates a cinema does not exist.
+	ErrCinemaNotFound = errors.New("cinema not found")
+)
 
 // Cinema is an administrator-managed cinema location.
 type Cinema struct {
@@ -32,7 +36,20 @@ type CreateCinemaInput struct {
 	City        string
 }
 
+// UpdateCinemaInput contains the replacement data for a cinema.
+type UpdateCinemaInput struct {
+	ActorUserID string
+	ID          string
+	Name        string
+	Address     string
+	City        string
+}
+
 // Repository persists cinema data and its matching audit event atomically.
 type Repository interface {
 	CreateCinema(context.Context, Cinema, AuditEvent) (Cinema, error)
+	ListCinemas(context.Context) ([]Cinema, error)
+	FindCinema(context.Context, string) (Cinema, error)
+	UpdateCinema(context.Context, Cinema, AuditEvent) (Cinema, error)
+	DeleteCinema(context.Context, string, AuditEvent) error
 }

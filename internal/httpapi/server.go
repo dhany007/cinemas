@@ -149,9 +149,16 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.e.ServeHTTP(writer, request)
 }
 
-// EnableAdminCinemaRoutes exposes the initial administrator-only cinema creation route.
+// EnableAdminCinemaRoutes exposes administrator-only cinema management routes.
 func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, service *adminservice.Service) {
+	s.e.GET("/v1/admin/cinemas", s.requireRole(authenticationService, auth.RoleAdmin, s.listCinemas(service)))
 	s.e.POST("/v1/admin/cinemas", s.requireRole(authenticationService, auth.RoleAdmin, s.createCinema(service)))
+	s.e.GET("/v1/admin/cinemas/:cinemaID", s.requireRole(authenticationService, auth.RoleAdmin, s.getCinema(service)))
+	s.e.PATCH("/v1/admin/cinemas/:cinemaID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateCinema(service)))
+	s.e.DELETE(
+		"/v1/admin/cinemas/:cinemaID",
+		s.requireRole(authenticationService, auth.RoleAdmin, s.deleteCinema(service)),
+	)
 }
 
 type createOrderRequest struct {
@@ -182,6 +189,10 @@ type cinemaResponse struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	City    string `json:"city"`
+}
+
+type cinemaListResponse struct {
+	Cinemas []cinemaResponse `json:"cinemas"`
 }
 
 type seatMapResponse struct {
@@ -323,15 +334,112 @@ func (s *Server) createCinema(service *adminservice.Service) echo.HandlerFunc {
 			Address:     request.Address,
 			City:        request.City,
 		})
-		if errors.Is(err, adminservice.ErrInvalidCinemaInput) {
-			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "name, address, and city are required")
-		}
 		if err != nil {
-			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to create cinema")
+			return writeCinemaError(c, err, "create")
 		}
-		return c.JSON(http.StatusCreated, cinemaResponse{
-			ID: cinema.ID, Name: cinema.Name, Address: cinema.Address, City: cinema.City,
+		return c.JSON(http.StatusCreated, toCinemaResponse(cinema))
+	}
+}
+
+func (s *Server) listCinemas(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cinemas, err := service.ListCinemas(c.Request().Context())
+		if err != nil {
+			return writeCinemaError(c, err, "list")
+		}
+
+		response := make([]cinemaResponse, len(cinemas))
+		for i, cinema := range cinemas {
+			response[i] = toCinemaResponse(cinema)
+		}
+		return c.JSON(http.StatusOK, cinemaListResponse{Cinemas: response})
+	}
+}
+
+func (s *Server) getCinema(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cinemaID, err := cinemaIDParam(c)
+		if err != nil {
+			return err
+		}
+		cinema, err := service.FindCinema(c.Request().Context(), cinemaID)
+		if err != nil {
+			return writeCinemaError(c, err, "load")
+		}
+		return c.JSON(http.StatusOK, toCinemaResponse(cinema))
+	}
+}
+
+func (s *Server) updateCinema(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cinemaID, err := cinemaIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request createCinemaRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		cinema, err := service.UpdateCinema(c.Request().Context(), adminservice.UpdateCinemaInput{
+			ActorUserID: identity.UserID,
+			ID:          cinemaID,
+			Name:        request.Name,
+			Address:     request.Address,
+			City:        request.City,
 		})
+		if err != nil {
+			return writeCinemaError(c, err, "update")
+		}
+		return c.JSON(http.StatusOK, toCinemaResponse(cinema))
+	}
+}
+
+func (s *Server) deleteCinema(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cinemaID, err := cinemaIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		if err := service.DeleteCinema(c.Request().Context(), identity.UserID, cinemaID); err != nil {
+			return writeCinemaError(c, err, "delete")
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func cinemaIDParam(c echo.Context) (string, error) {
+	cinemaID := c.Param("cinemaID")
+	if !isUUID(cinemaID) {
+		return "", writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "cinema ID must be a UUID")
+	}
+	return cinemaID, nil
+}
+
+func toCinemaResponse(cinema adminservice.Cinema) cinemaResponse {
+	return cinemaResponse{
+		ID:      cinema.ID,
+		Name:    cinema.Name,
+		Address: cinema.Address,
+		City:    cinema.City,
+	}
+}
+
+func writeCinemaError(c echo.Context, err error, operation string) error {
+	switch {
+	case errors.Is(err, adminservice.ErrInvalidCinemaInput):
+		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "name, address, and city are required")
+	case errors.Is(err, adminservice.ErrCinemaNotFound):
+		return writeError(c, http.StatusNotFound, "CINEMA_NOT_FOUND", "cinema was not found")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" cinema")
 	}
 }
 

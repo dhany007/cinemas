@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/citradigital/cinemas/internal/admin"
 	"github.com/citradigital/cinemas/internal/auth"
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
+	"github.com/labstack/echo/v4"
 )
 
 func TestServerLogsRequestMetadataWithoutRequestBody(t *testing.T) {
@@ -155,6 +157,169 @@ func TestServerRejectsAdminBootstrapWithoutConfiguredToken(t *testing.T) {
 	if want := `"code":"UNAUTHENTICATED"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
 		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
 	}
+}
+
+func TestServerAdminCinemaCRUD(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email:       "admin@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	adminRepository := admin.NewMemoryRepository()
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(adminRepository))
+
+	createRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/cinemas",
+		`{"name":"Central Cinema","address":"Jl. Example 1","city":"Jakarta"}`,
+		adminSession.AccessToken,
+	)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf(
+			"create status = %d, want %d; body = %s",
+			createRecorder.Code,
+			http.StatusCreated,
+			createRecorder.Body.String(),
+		)
+	}
+
+	var created cinemaResponse
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	if !isUUID(created.ID) {
+		t.Fatalf("created cinema ID = %q, want UUID", created.ID)
+	}
+
+	listRecorder := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/cinemas", "", adminSession.AccessToken)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d; body = %s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
+	}
+	if want := `"cinemas":[{"id":"` + created.ID + `"`; !bytes.Contains(listRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("list body = %s, want %s", listRecorder.Body.String(), want)
+	}
+
+	getRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodGet,
+		"/v1/admin/cinemas/"+created.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d; body = %s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	updateRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPatch,
+		"/v1/admin/cinemas/"+created.ID,
+		`{"name":"Central Cinema Updated","address":"Jl. Example 2","city":"Bandung"}`,
+		adminSession.AccessToken,
+	)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want %d; body = %s", updateRecorder.Code, http.StatusOK, updateRecorder.Body.String())
+	}
+	if want := `"name":"Central Cinema Updated"`; !bytes.Contains(updateRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("update body = %s, want %s", updateRecorder.Body.String(), want)
+	}
+
+	deleteRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodDelete,
+		"/v1/admin/cinemas/"+created.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf(
+			"delete status = %d, want %d; body = %s",
+			deleteRecorder.Code,
+			http.StatusNoContent,
+			deleteRecorder.Body.String(),
+		)
+	}
+
+	notFoundRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodGet,
+		"/v1/admin/cinemas/"+created.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if notFoundRecorder.Code != http.StatusNotFound {
+		t.Fatalf("not found status = %d, want %d", notFoundRecorder.Code, http.StatusNotFound)
+	}
+	if want := `"code":"CINEMA_NOT_FOUND"`; !bytes.Contains(notFoundRecorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("not found body = %s, want %s", notFoundRecorder.Body.String(), want)
+	}
+
+	if got := adminRepository.AuditEvents(); len(got) != 3 {
+		t.Fatalf("audit events = %#v, want create, update, and delete", got)
+	}
+}
+
+func TestServerRejectsCustomerCinemaManagement(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	customerSession, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email:       "customer@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Customer",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
+
+	recorder := serveAdminCinemaRequest(
+		server,
+		http.MethodGet,
+		"/v1/admin/cinemas",
+		"",
+		customerSession.AccessToken,
+	)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if want := `"code":"FORBIDDEN"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func serveAdminCinemaRequest(
+	server *Server,
+	method string,
+	path string,
+	body string,
+	accessToken string,
+) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set(echo.HeaderAuthorization, "Bearer "+accessToken)
+	if body != "" {
+		request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	}
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	return recorder
 }
 
 func TestServerRateLimitsLogin(t *testing.T) {
