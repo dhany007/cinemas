@@ -9,6 +9,7 @@ import (
 
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
+	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 )
@@ -274,6 +275,38 @@ func TestServerListMovieShowtimesReturnsNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
 	}
 	if want := `"code":"MOVIE_NOT_FOUND"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerCreateFakePayment(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, func() time.Time { return now })
+	paymentService := payments.NewService(payments.NewMemoryRepository([]payments.Order{{
+		ID:        "10000000-0000-4000-8000-000000000001",
+		Status:    payments.OrderPendingPayment,
+		ExpiresAt: now.Add(time.Minute),
+		Items: []payments.OrderItem{{
+			ID:          "20000000-0000-4000-8000-000000000001",
+			SeatID:      "30000000-0000-4000-8000-000000000001",
+			PriceAmount: "50000.00",
+			Currency:    "IDR",
+		}},
+	}}), func() time.Time { return now })
+	server := NewServerWithFakePayments(bookingService, paymentService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/orders/10000000-0000-4000-8000-000000000001/payment-intents",
+		nil,
+	)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	if want := `"status":"SUCCEEDED"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
 		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
 	}
 }

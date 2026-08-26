@@ -7,6 +7,7 @@ import (
 
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
+	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 	"github.com/labstack/echo/v4"
@@ -20,7 +21,7 @@ type Server struct {
 
 // NewServer creates an Echo server backed by the booking service.
 func NewServer(bookingService *booking.Service) *Server {
-	return newServer(bookingService, nil, nil, nil)
+	return newServer(bookingService, nil, nil, nil, nil)
 }
 
 // NewServerWithSeatMap creates an Echo server with booking and seat-map routes.
@@ -28,7 +29,7 @@ func NewServerWithSeatMap(
 	bookingService *booking.Service,
 	seatMapService *seatinventory.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, nil, nil)
+	return newServer(bookingService, seatMapService, nil, nil, nil)
 }
 
 // NewServerWithMovieCatalog creates an Echo server with public catalog and seat-map routes.
@@ -37,7 +38,7 @@ func NewServerWithMovieCatalog(
 	seatMapService *seatinventory.Service,
 	movieCatalogService *catalog.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService, nil)
+	return newServer(bookingService, seatMapService, movieCatalogService, nil, nil)
 }
 
 // NewServerWithPublicCatalog creates an Echo server with public catalog and seat-map routes.
@@ -47,7 +48,23 @@ func NewServerWithPublicCatalog(
 	movieCatalogService *catalog.Service,
 	showtimeService *scheduling.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService)
+	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService, nil)
+}
+
+// NewServerWithAllFeatures creates an Echo server with every currently implemented feature.
+func NewServerWithAllFeatures(
+	bookingService *booking.Service,
+	seatMapService *seatinventory.Service,
+	movieCatalogService *catalog.Service,
+	showtimeService *scheduling.Service,
+	paymentService *payments.Service,
+) *Server {
+	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService, paymentService)
+}
+
+// NewServerWithFakePayments creates an Echo server with the local fake payment route.
+func NewServerWithFakePayments(bookingService *booking.Service, paymentService *payments.Service) *Server {
+	return newServer(bookingService, nil, nil, nil, paymentService)
 }
 
 func newServer(
@@ -55,6 +72,7 @@ func newServer(
 	seatMapService *seatinventory.Service,
 	movieCatalogService *catalog.Service,
 	showtimeService *scheduling.Service,
+	paymentService *payments.Service,
 ) *Server {
 	e := echo.New()
 	e.HideBanner = true
@@ -64,6 +82,9 @@ func newServer(
 	server := &Server{e: e}
 	e.GET("/healthz", server.health)
 	e.POST("/v1/orders", server.createOrderHold(bookingService))
+	if paymentService != nil {
+		e.POST("/v1/orders/:orderID/payment-intents", server.createFakePayment(paymentService))
+	}
 	if seatMapService != nil {
 		e.GET("/v1/showtimes/:showtimeID/seats", server.getShowtimeSeats(seatMapService))
 	}
@@ -148,6 +169,15 @@ type showtimeResponse struct {
 	Currency   string `json:"currency"`
 }
 
+type paymentResponse struct {
+	Provider  string `json:"provider"`
+	Reference string `json:"reference"`
+	Status    string `json:"status"`
+	Amount    string `json:"amount"`
+	Currency  string `json:"currency"`
+	PaidAt    string `json:"paid_at"`
+}
+
 const uuidLength = 36
 
 func (s *Server) health(c echo.Context) error {
@@ -185,6 +215,36 @@ func (s *Server) createOrderHold(service *booking.Service) echo.HandlerFunc {
 			Status:    order.Status,
 			ExpiresAt: order.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 			SeatIDs:   seatIDs,
+		})
+	}
+}
+
+func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		orderID := c.Param("orderID")
+		if !isUUID(orderID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "order ID must be a UUID")
+		}
+
+		payment, err := service.CreateFakePayment(c.Request().Context(), orderID)
+		if err != nil {
+			switch {
+			case errors.Is(err, payments.ErrOrderNotFound):
+				return writeError(c, http.StatusNotFound, "ORDER_NOT_FOUND", "order was not found")
+			case errors.Is(err, payments.ErrOrderNotPayable), errors.Is(err, payments.ErrOrderExpired):
+				return writeError(c, http.StatusConflict, "ORDER_NOT_PAYABLE", "order can no longer be paid")
+			default:
+				return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to complete payment")
+			}
+		}
+
+		return c.JSON(http.StatusCreated, paymentResponse{
+			Provider:  payment.Provider,
+			Reference: payment.Reference,
+			Status:    string(payment.Status),
+			Amount:    payment.Amount,
+			Currency:  payment.Currency,
+			PaidAt:    payment.PaidAt.Format(time.RFC3339),
 		})
 	}
 }

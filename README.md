@@ -24,6 +24,8 @@ The API listens on `:8080` by default. Set `ADDR` to override it. `GET /healthz`
 
 `GET /v1/showtimes/{showtimeId}/seats` returns the public seat map for a UUID showtime. Each seat includes its price and current availability (`AVAILABLE`, `HELD`, `SOLD`, or `BLOCKED`); expired holds are returned as `AVAILABLE`. The response does not expose an order or hold owner.
 
+`POST /v1/orders/{orderId}/payment-intents` uses the local `FAKE` provider during development. It synchronously returns `SUCCEEDED`, atomically marks the eligible order paid, changes its held seats to `SOLD`, and issues tickets. It is a development-only provider and must be replaced by a signed asynchronous gateway webhook before production.
+
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires an `Idempotency-Key` header and a JSON body:
 
 ```json

@@ -13,6 +13,7 @@ import (
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/httpapi"
+	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/postgres"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
@@ -53,13 +54,15 @@ func main() {
 	seatMapService := seatinventory.NewService(postgres.NewSeatMapRepository(pool))
 	movieCatalogService := catalog.NewService(postgres.NewMoviesRepository(pool))
 	showtimeService := scheduling.NewService(postgres.NewShowtimesRepository(pool))
+	paymentService := payments.NewService(postgres.NewPaymentsRepository(pool), time.Now)
 	server := &http.Server{
 		Addr: environmentOr("ADDR", ":8080"),
-		Handler: httpapi.NewServerWithPublicCatalog(
+		Handler: httpapi.NewServerWithAllFeatures(
 			bookingService,
 			seatMapService,
 			movieCatalogService,
 			showtimeService,
+			paymentService,
 		),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
