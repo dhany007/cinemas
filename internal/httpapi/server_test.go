@@ -9,6 +9,7 @@ import (
 
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
+	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 )
 
@@ -185,6 +186,94 @@ func TestServerListMoviesRejectsInvalidCursor(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMovieShowtimes(t *testing.T) {
+	movieID := "10000000-0000-4000-8000-000000000001"
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository(nil))
+	showtimeService := scheduling.NewService(scheduling.NewMemoryRepository(map[string][]scheduling.Showtime{
+		movieID: {
+			{
+				ID:         "20000000-0000-4000-8000-000000000001",
+				StudioID:   "30000000-0000-4000-8000-000000000001",
+				StudioName: "Studio 1",
+				CinemaID:   "40000000-0000-4000-8000-000000000001",
+				CinemaName: "Central Cinema",
+				CinemaCity: "Jakarta",
+				StartsAt:   time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC),
+				EndsAt:     time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC),
+				BasePrice:  "50000.00",
+				Currency:   "IDR",
+			},
+		},
+	}))
+	server := NewServerWithPublicCatalog(bookingService, seatMapService, movieCatalogService, showtimeService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/movies/"+movieID+"/showtimes?date=2026-08-26",
+		nil,
+	)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if want := `"cinema_name":"Central Cinema"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+	if want := `"base_price":"50000.00"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMovieShowtimesRejectsInvalidDate(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository(nil))
+	showtimeService := scheduling.NewService(scheduling.NewMemoryRepository(nil))
+	server := NewServerWithPublicCatalog(bookingService, seatMapService, movieCatalogService, showtimeService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/movies/10000000-0000-4000-8000-000000000001/showtimes?date=invalid",
+		nil,
+	)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerListMovieShowtimesReturnsNotFound(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	movieCatalogService := catalog.NewService(catalog.NewMemoryRepository(nil))
+	showtimeService := scheduling.NewService(scheduling.NewMemoryRepository(nil))
+	server := NewServerWithPublicCatalog(bookingService, seatMapService, movieCatalogService, showtimeService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/movies/10000000-0000-4000-8000-000000000002/showtimes?date=2026-08-26",
+		nil,
+	)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if want := `"code":"MOVIE_NOT_FOUND"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
 		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
 	}
 }

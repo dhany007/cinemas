@@ -3,9 +3,11 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
+	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -18,7 +20,7 @@ type Server struct {
 
 // NewServer creates an Echo server backed by the booking service.
 func NewServer(bookingService *booking.Service) *Server {
-	return newServer(bookingService, nil, nil)
+	return newServer(bookingService, nil, nil, nil)
 }
 
 // NewServerWithSeatMap creates an Echo server with booking and seat-map routes.
@@ -26,7 +28,7 @@ func NewServerWithSeatMap(
 	bookingService *booking.Service,
 	seatMapService *seatinventory.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, nil)
+	return newServer(bookingService, seatMapService, nil, nil)
 }
 
 // NewServerWithMovieCatalog creates an Echo server with public catalog and seat-map routes.
@@ -35,13 +37,24 @@ func NewServerWithMovieCatalog(
 	seatMapService *seatinventory.Service,
 	movieCatalogService *catalog.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService)
+	return newServer(bookingService, seatMapService, movieCatalogService, nil)
+}
+
+// NewServerWithPublicCatalog creates an Echo server with public catalog and seat-map routes.
+func NewServerWithPublicCatalog(
+	bookingService *booking.Service,
+	seatMapService *seatinventory.Service,
+	movieCatalogService *catalog.Service,
+	showtimeService *scheduling.Service,
+) *Server {
+	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService)
 }
 
 func newServer(
 	bookingService *booking.Service,
 	seatMapService *seatinventory.Service,
 	movieCatalogService *catalog.Service,
+	showtimeService *scheduling.Service,
 ) *Server {
 	e := echo.New()
 	e.HideBanner = true
@@ -56,6 +69,9 @@ func newServer(
 	}
 	if movieCatalogService != nil {
 		e.GET("/v1/movies", server.listMovies(movieCatalogService))
+	}
+	if showtimeService != nil {
+		e.GET("/v1/movies/:movieID/showtimes", server.listMovieShowtimes(showtimeService))
 	}
 	return server
 }
@@ -111,6 +127,25 @@ type movieResponse struct {
 	Synopsis        *string `json:"synopsis,omitempty"`
 	PosterURL       *string `json:"poster_url,omitempty"`
 	ReleaseDate     *string `json:"release_date,omitempty"`
+}
+
+type movieShowtimesResponse struct {
+	MovieID   string             `json:"movie_id"`
+	Date      string             `json:"date"`
+	Showtimes []showtimeResponse `json:"showtimes"`
+}
+
+type showtimeResponse struct {
+	ID         string `json:"id"`
+	StudioID   string `json:"studio_id"`
+	StudioName string `json:"studio_name"`
+	CinemaID   string `json:"cinema_id"`
+	CinemaName string `json:"cinema_name"`
+	CinemaCity string `json:"cinema_city"`
+	StartsAt   string `json:"starts_at"`
+	EndsAt     string `json:"ends_at"`
+	BasePrice  string `json:"base_price"`
+	Currency   string `json:"currency"`
 }
 
 const uuidLength = 36
@@ -222,6 +257,56 @@ func (s *Server) listMovies(service *catalog.Service) echo.HandlerFunc {
 		return c.JSON(http.StatusOK, movieListResponse{
 			Movies:     movies,
 			NextCursor: page.NextCursor,
+		})
+	}
+}
+
+func (s *Server) listMovieShowtimes(service *scheduling.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		movieID := c.Param("movieID")
+		if !isUUID(movieID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "movie ID must be a UUID")
+		}
+
+		date, err := scheduling.ParseDate(c.QueryParam("date"))
+		if err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "date must use YYYY-MM-DD")
+		}
+
+		showtimes, err := service.ListMovieShowtimes(c.Request().Context(), scheduling.ListInput{
+			MovieID: movieID,
+			Date:    date,
+		})
+		if err != nil {
+			if errors.Is(err, scheduling.ErrMovieNotFound) {
+				return writeError(c, http.StatusNotFound, "MOVIE_NOT_FOUND", "movie was not found")
+			}
+			if errors.Is(err, scheduling.ErrInvalidDate) {
+				return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "date must use YYYY-MM-DD")
+			}
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to load movie showtimes")
+		}
+
+		responseShowtimes := make([]showtimeResponse, len(showtimes))
+		for i, showtime := range showtimes {
+			responseShowtimes[i] = showtimeResponse{
+				ID:         showtime.ID,
+				StudioID:   showtime.StudioID,
+				StudioName: showtime.StudioName,
+				CinemaID:   showtime.CinemaID,
+				CinemaName: showtime.CinemaName,
+				CinemaCity: showtime.CinemaCity,
+				StartsAt:   showtime.StartsAt.Format(time.RFC3339),
+				EndsAt:     showtime.EndsAt.Format(time.RFC3339),
+				BasePrice:  showtime.BasePrice,
+				Currency:   showtime.Currency,
+			}
+		}
+
+		return c.JSON(http.StatusOK, movieShowtimesResponse{
+			MovieID:   movieID,
+			Date:      date.Format(time.DateOnly),
+			Showtimes: responseShowtimes,
 		})
 	}
 }
