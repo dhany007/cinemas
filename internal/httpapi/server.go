@@ -19,7 +19,8 @@ import (
 
 // Server exposes the cinema HTTP API.
 type Server struct {
-	e *echo.Echo
+	e           *echo.Echo
+	rateLimiter *clientRateLimiter
 }
 
 // NewServer creates an Echo server backed by the booking service.
@@ -103,17 +104,22 @@ func newServer(
 	e.Use(middleware.RequestID())
 	e.Use(middleware.Recover())
 
-	server := &Server{e: e}
+	server := &Server{e: e, rateLimiter: newClientRateLimiter(time.Now)}
 	e.GET("/healthz", server.health)
 	if authenticationService == nil {
 		e.POST("/v1/orders", server.createOrderHold(bookingService))
 	} else {
-		e.POST("/v1/auth/register", server.register(authenticationService))
-		e.POST("/v1/auth/login", server.login(authenticationService))
-		e.POST("/v1/auth/bootstrap-admin", server.bootstrapAdmin(authenticationService, adminBootstrapToken))
+		e.POST("/v1/auth/register", server.rateLimit(server.register(authenticationService)))
+		e.POST("/v1/auth/login", server.rateLimit(server.login(authenticationService)))
+		e.POST(
+			"/v1/auth/bootstrap-admin",
+			server.rateLimit(server.bootstrapAdmin(authenticationService, adminBootstrapToken)),
+		)
 		e.POST(
 			"/v1/orders",
-			server.requireRole(authenticationService, auth.RoleCustomer, server.createOrderHold(bookingService)),
+			server.rateLimit(
+				server.requireRole(authenticationService, auth.RoleCustomer, server.createOrderHold(bookingService)),
+			),
 		)
 	}
 	if paymentService != nil {
@@ -121,7 +127,7 @@ func newServer(
 		if authenticationService != nil {
 			paymentHandler = server.requireRole(authenticationService, auth.RoleCustomer, paymentHandler)
 		}
-		e.POST("/v1/orders/:orderID/payment-intents", paymentHandler)
+		e.POST("/v1/orders/:orderID/payment-intents", server.rateLimit(paymentHandler))
 	}
 	if seatMapService != nil {
 		e.GET("/v1/showtimes/:showtimeID/seats", server.getShowtimeSeats(seatMapService))

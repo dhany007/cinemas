@@ -27,6 +27,7 @@ paths:
         '201': {$ref: '#/components/responses/SessionCreated'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '409': {$ref: '#/components/responses/EmailAlreadyRegistered'}
+        '429': {$ref: '#/components/responses/RateLimited'}
   /v1/auth/login:
     post:
       summary: Log in with email and password
@@ -44,6 +45,7 @@ paths:
         '200': {$ref: '#/components/responses/Session'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/InvalidCredentials'}
+        '429': {$ref: '#/components/responses/RateLimited'}
   /v1/auth/bootstrap-admin:
     post:
       summary: Bootstrap the one initial administrator
@@ -58,6 +60,7 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '409': {$ref: '#/components/responses/AdminAlreadyBootstrapped'}
+        '429': {$ref: '#/components/responses/RateLimited'}
   /v1/movies:
     get:
       summary: List public movies
@@ -159,6 +162,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/SeatOrIdempotencyConflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
   /v1/orders/{orderID}/payment-intents:
     post:
       summary: Complete an authenticated customer's order with the local fake provider
@@ -176,6 +180,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/OrderNotFound'}
         '409': {$ref: '#/components/responses/OrderNotPayable'}
+        '429': {$ref: '#/components/responses/RateLimited'}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
@@ -209,6 +214,7 @@ components:
     OrderNotFound: {description: Order not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotPayable: {description: Order cannot be paid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatOrIdempotencyConflict: {description: Seat unavailable or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    RateLimited: {description: Request limit exceeded, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   schemas:
     UUID: {type: string, format: uuid}
     Error:

@@ -137,6 +137,33 @@ func TestServerRejectsAdminBootstrapWithoutConfiguredToken(t *testing.T) {
 	}
 }
 
+func TestServerRateLimitsLogin(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	for requestCount := 0; requestCount < rateLimitMaxRequests; requestCount++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{}`))
+		request.RemoteAddr = "192.0.2.1:1234"
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("request %d status = %d, want %d", requestCount, recorder.Code, http.StatusBadRequest)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{}`))
+	request.RemoteAddr = "192.0.2.1:1234"
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+}
+
 func TestServerCreateOrderHold(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
 	service := booking.NewService(
