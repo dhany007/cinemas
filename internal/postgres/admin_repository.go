@@ -522,3 +522,199 @@ func (r *AdminRepository) DeleteMovie(ctx context.Context, id string, audit admi
 	}
 	return nil
 }
+
+// CreateShowtime stores a showtime, materializes its seats, and records an audit event atomically.
+func (r *AdminRepository) CreateShowtime(
+	ctx context.Context,
+	showtime admin.Showtime,
+	audit admin.AuditEvent,
+) (admin.Showtime, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Showtime{}, fmt.Errorf("begin showtime create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := ensureShowtimeReferences(ctx, tx, showtime); err != nil {
+		return admin.Showtime{}, err
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO showtimes (id, movie_id, studio_id, starts_at, ends_at, base_price, currency)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		showtime.ID,
+		showtime.MovieID,
+		showtime.StudioID,
+		showtime.StartsAt,
+		showtime.EndsAt,
+		showtime.BasePrice,
+		showtime.Currency,
+	); err != nil {
+		return admin.Showtime{}, fmt.Errorf("insert showtime: %w", err)
+	}
+	if err := materializeShowtimeSeats(ctx, tx, showtime); err != nil {
+		return admin.Showtime{}, err
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Showtime{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Showtime{}, fmt.Errorf("commit showtime create: %w", err)
+	}
+	return showtime, nil
+}
+
+// ListShowtimes returns showtimes in deterministic start-time and ID order.
+func (r *AdminRepository) ListShowtimes(ctx context.Context) ([]admin.Showtime, error) {
+	rows, err := r.pool.Query(
+		ctx,
+		`SELECT id::text, movie_id::text, studio_id::text, starts_at, ends_at, base_price::text, currency::text
+		 FROM showtimes ORDER BY starts_at, id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list showtimes: %w", err)
+	}
+	defer rows.Close()
+	var showtimes []admin.Showtime
+	for rows.Next() {
+		var showtime admin.Showtime
+		if err := rows.Scan(
+			&showtime.ID,
+			&showtime.MovieID,
+			&showtime.StudioID,
+			&showtime.StartsAt,
+			&showtime.EndsAt,
+			&showtime.BasePrice,
+			&showtime.Currency,
+		); err != nil {
+			return nil, fmt.Errorf("scan showtime: %w", err)
+		}
+		showtimes = append(showtimes, showtime)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate showtimes: %w", err)
+	}
+	return showtimes, nil
+}
+
+// UpdateShowtime replaces a showtime and rematerializes its seats atomically.
+func (r *AdminRepository) UpdateShowtime(
+	ctx context.Context,
+	showtime admin.Showtime,
+	audit admin.AuditEvent,
+) (admin.Showtime, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return admin.Showtime{}, fmt.Errorf("begin showtime update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := ensureShowtimeReferences(ctx, tx, showtime); err != nil {
+		return admin.Showtime{}, err
+	}
+	tag, err := tx.Exec(
+		ctx,
+		`UPDATE showtimes
+		 SET movie_id = $2, studio_id = $3, starts_at = $4, ends_at = $5, base_price = $6, currency = $7,
+		     updated_at = now()
+		 WHERE id = $1`,
+		showtime.ID,
+		showtime.MovieID,
+		showtime.StudioID,
+		showtime.StartsAt,
+		showtime.EndsAt,
+		showtime.BasePrice,
+		showtime.Currency,
+	)
+	if err != nil {
+		return admin.Showtime{}, fmt.Errorf("update showtime: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.Showtime{}, admin.ErrShowtimeNotFound
+	}
+	if err := replaceShowtimeSeats(ctx, tx, showtime); err != nil {
+		return admin.Showtime{}, err
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Showtime{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return admin.Showtime{}, fmt.Errorf("commit showtime update: %w", err)
+	}
+	return showtime, nil
+}
+
+// DeleteShowtime removes a showtime, its unused materialized seats, and its audit event atomically.
+func (r *AdminRepository) DeleteShowtime(ctx context.Context, id string, audit admin.AuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin showtime delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM showtime_seats WHERE showtime_id = $1`, id); err != nil {
+		if isForeignKeyViolation(err) {
+			return admin.ErrShowtimeInUse
+		}
+		return fmt.Errorf("delete showtime seats: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM showtimes WHERE id = $1`, id)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return admin.ErrShowtimeInUse
+		}
+		return fmt.Errorf("delete showtime: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.ErrShowtimeNotFound
+	}
+	if err := insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit showtime delete: %w", err)
+	}
+	return nil
+}
+
+func ensureShowtimeReferences(ctx context.Context, tx pgx.Tx, showtime admin.Showtime) error {
+	var movieExists bool
+	movieRow := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM movies WHERE id = $1)`, showtime.MovieID)
+	if err := movieRow.Scan(&movieExists); err != nil {
+		return fmt.Errorf("check showtime movie: %w", err)
+	}
+	if !movieExists {
+		return admin.ErrMovieNotFound
+	}
+	var studioExists bool
+	studioRow := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM studios WHERE id = $1)`, showtime.StudioID)
+	if err := studioRow.Scan(&studioExists); err != nil {
+		return fmt.Errorf("check showtime studio: %w", err)
+	}
+	if !studioExists {
+		return admin.ErrStudioNotFound
+	}
+	return nil
+}
+
+func replaceShowtimeSeats(ctx context.Context, tx pgx.Tx, showtime admin.Showtime) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM showtime_seats WHERE showtime_id = $1`, showtime.ID); err != nil {
+		if isForeignKeyViolation(err) {
+			return admin.ErrShowtimeInUse
+		}
+		return fmt.Errorf("delete showtime seats: %w", err)
+	}
+	return materializeShowtimeSeats(ctx, tx, showtime)
+}
+
+func materializeShowtimeSeats(ctx context.Context, tx pgx.Tx, showtime admin.Showtime) error {
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO showtime_seats (showtime_id, seat_id, price_amount, currency)
+		 SELECT $1, id, $2, $3 FROM seats WHERE studio_id = $4`,
+		showtime.ID,
+		showtime.BasePrice,
+		showtime.Currency,
+		showtime.StudioID,
+	); err != nil {
+		return fmt.Errorf("materialize showtime seats: %w", err)
+	}
+	return nil
+}

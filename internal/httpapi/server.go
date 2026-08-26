@@ -172,6 +172,16 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 	s.e.POST("/v1/admin/movies", s.requireRole(authenticationService, auth.RoleAdmin, s.createMovie(service)))
 	s.e.PATCH("/v1/admin/movies/:movieID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateMovie(service)))
 	s.e.DELETE("/v1/admin/movies/:movieID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteMovie(service)))
+	s.e.GET("/v1/admin/showtimes", s.requireRole(authenticationService, auth.RoleAdmin, s.listAdminShowtimes(service)))
+	s.e.POST("/v1/admin/showtimes", s.requireRole(authenticationService, auth.RoleAdmin, s.createShowtime(service)))
+	s.e.PATCH(
+		"/v1/admin/showtimes/:showtimeID",
+		s.requireRole(authenticationService, auth.RoleAdmin, s.updateShowtime(service)),
+	)
+	s.e.DELETE(
+		"/v1/admin/showtimes/:showtimeID",
+		s.requireRole(authenticationService, auth.RoleAdmin, s.deleteShowtime(service)),
+	)
 }
 
 type createOrderRequest struct {
@@ -242,6 +252,26 @@ type adminMovieRequest struct {
 	Synopsis        *string `json:"synopsis"`
 	PosterURL       *string `json:"poster_url"`
 	ReleaseDate     *string `json:"release_date"`
+}
+type adminShowtimeRequest struct {
+	MovieID   string `json:"movie_id"`
+	StudioID  string `json:"studio_id"`
+	StartsAt  string `json:"starts_at"`
+	EndsAt    string `json:"ends_at"`
+	BasePrice string `json:"base_price"`
+	Currency  string `json:"currency"`
+}
+type adminShowtimeResponse struct {
+	ID        string `json:"id"`
+	MovieID   string `json:"movie_id"`
+	StudioID  string `json:"studio_id"`
+	StartsAt  string `json:"starts_at"`
+	EndsAt    string `json:"ends_at"`
+	BasePrice string `json:"base_price"`
+	Currency  string `json:"currency"`
+}
+type adminShowtimeListResponse struct {
+	Showtimes []adminShowtimeResponse `json:"showtimes"`
 }
 
 type seatMapResponse struct {
@@ -817,6 +847,157 @@ func writeMovieError(c echo.Context, err error, operation string) error {
 		return writeError(c, http.StatusNotFound, "MOVIE_NOT_FOUND", "movie was not found")
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" movie")
+	}
+}
+
+func (s *Server) createShowtime(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request adminShowtimeRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		input, err := toCreateShowtimeInput(identity.UserID, request)
+		if err != nil {
+			return writeShowtimeError(c, err, "create")
+		}
+		showtime, err := service.CreateShowtime(c.Request().Context(), input)
+		if err != nil {
+			return writeShowtimeError(c, err, "create")
+		}
+		return c.JSON(http.StatusCreated, toAdminShowtimeResponse(showtime))
+	}
+}
+
+func (s *Server) listAdminShowtimes(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		showtimes, err := service.ListShowtimes(c.Request().Context())
+		if err != nil {
+			return writeShowtimeError(c, err, "list")
+		}
+		response := make([]adminShowtimeResponse, len(showtimes))
+		for i, showtime := range showtimes {
+			response[i] = toAdminShowtimeResponse(showtime)
+		}
+		return c.JSON(http.StatusOK, adminShowtimeListResponse{Showtimes: response})
+	}
+}
+
+func (s *Server) updateShowtime(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		showtimeID, err := showtimeIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request adminShowtimeRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		input, err := toCreateShowtimeInput(identity.UserID, request)
+		if err != nil {
+			return writeShowtimeError(c, err, "update")
+		}
+		showtime, err := service.UpdateShowtime(c.Request().Context(), adminservice.UpdateShowtimeInput{
+			ActorUserID: input.ActorUserID,
+			ID:          showtimeID,
+			MovieID:     input.MovieID,
+			StudioID:    input.StudioID,
+			StartsAt:    input.StartsAt,
+			EndsAt:      input.EndsAt,
+			BasePrice:   input.BasePrice,
+			Currency:    input.Currency,
+		})
+		if err != nil {
+			return writeShowtimeError(c, err, "update")
+		}
+		return c.JSON(http.StatusOK, toAdminShowtimeResponse(showtime))
+	}
+}
+
+func (s *Server) deleteShowtime(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		showtimeID, err := showtimeIDParam(c)
+		if err != nil {
+			return err
+		}
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		if err := service.DeleteShowtime(c.Request().Context(), identity.UserID, showtimeID); err != nil {
+			return writeShowtimeError(c, err, "delete")
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func toCreateShowtimeInput(
+	actorUserID string,
+	request adminShowtimeRequest,
+) (adminservice.CreateShowtimeInput, error) {
+	if !isUUID(request.MovieID) || !isUUID(request.StudioID) {
+		return adminservice.CreateShowtimeInput{}, adminservice.ErrInvalidShowtimeInput
+	}
+	startsAt, err := time.Parse(time.RFC3339, request.StartsAt)
+	if err != nil {
+		return adminservice.CreateShowtimeInput{}, adminservice.ErrInvalidShowtimeInput
+	}
+	endsAt, err := time.Parse(time.RFC3339, request.EndsAt)
+	if err != nil {
+		return adminservice.CreateShowtimeInput{}, adminservice.ErrInvalidShowtimeInput
+	}
+	return adminservice.CreateShowtimeInput{
+		ActorUserID: actorUserID,
+		MovieID:     request.MovieID,
+		StudioID:    request.StudioID,
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		BasePrice:   request.BasePrice,
+		Currency:    request.Currency,
+	}, nil
+}
+
+func showtimeIDParam(c echo.Context) (string, error) {
+	showtimeID := c.Param("showtimeID")
+	if !isUUID(showtimeID) {
+		return "", writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "showtime ID must be a UUID")
+	}
+	return showtimeID, nil
+}
+
+func toAdminShowtimeResponse(showtime adminservice.Showtime) adminShowtimeResponse {
+	return adminShowtimeResponse{
+		ID:        showtime.ID,
+		MovieID:   showtime.MovieID,
+		StudioID:  showtime.StudioID,
+		StartsAt:  showtime.StartsAt.Format(time.RFC3339),
+		EndsAt:    showtime.EndsAt.Format(time.RFC3339),
+		BasePrice: showtime.BasePrice,
+		Currency:  showtime.Currency,
+	}
+}
+
+func writeShowtimeError(c echo.Context, err error, operation string) error {
+	switch {
+	case errors.Is(err, adminservice.ErrInvalidShowtimeInput):
+		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "showtime metadata is invalid")
+	case errors.Is(err, adminservice.ErrMovieNotFound):
+		return writeError(c, http.StatusNotFound, "MOVIE_NOT_FOUND", "movie was not found")
+	case errors.Is(err, adminservice.ErrStudioNotFound):
+		return writeError(c, http.StatusNotFound, "STUDIO_NOT_FOUND", "studio was not found")
+	case errors.Is(err, adminservice.ErrShowtimeNotFound):
+		return writeError(c, http.StatusNotFound, "SHOWTIME_NOT_FOUND", "showtime was not found")
+	case errors.Is(err, adminservice.ErrShowtimeInUse):
+		return writeError(c, http.StatusConflict, "SHOWTIME_IN_USE", "showtime inventory has already been used")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" showtime")
 	}
 }
 

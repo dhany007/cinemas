@@ -237,6 +237,48 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/MovieNotFound'}
+  /v1/admin/showtimes:
+    get:
+      summary: List administrator-managed showtimes
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Showtimes in deterministic start-time and ID order, content: {application/json: {schema: {$ref: '#/components/schemas/AdminShowtimeList'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a showtime and materialize its studio seat inventory
+      security: [{bearerAuth: []}]
+      requestBody: {$ref: '#/components/requestBodies/AdminShowtimeWrite'}
+      responses:
+        '201': {description: Showtime created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminShowtime'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/ShowtimeReferenceNotFound'}
+  /v1/admin/showtimes/{showtimeID}:
+    patch:
+      summary: Replace a showtime and rematerialize unused seat inventory
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ShowtimeID'}]
+      requestBody: {$ref: '#/components/requestBodies/AdminShowtimeWrite'}
+      responses:
+        '200': {description: Showtime updated, content: {application/json: {schema: {$ref: '#/components/schemas/AdminShowtime'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/ShowtimeReferenceNotFound'}
+        '409': {$ref: '#/components/responses/ShowtimeInUse'}
+    delete:
+      summary: Delete a showtime without dependent inventory or orders
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ShowtimeID'}]
+      responses:
+        '204': {description: Showtime deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/ShowtimeNotFound'}
+        '409': {$ref: '#/components/responses/ShowtimeInUse'}
   /v1/movies:
     get:
       summary: List public movies
@@ -425,6 +467,20 @@ components:
               synopsis: {type: string}
               poster_url: {type: string, format: uri}
               release_date: {type: string, format: date}
+    AdminShowtimeWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [movie_id, studio_id, starts_at, ends_at, base_price, currency]
+            properties:
+              movie_id: {$ref: '#/components/schemas/UUID'}
+              studio_id: {$ref: '#/components/schemas/UUID'}
+              starts_at: {type: string, format: date-time}
+              ends_at: {type: string, format: date-time}
+              base_price: {type: string, pattern: '^[0-9]+(\.[0-9]{1,2})?$'}
+              currency: {type: string, pattern: '^[A-Z]{3}$'}
   responses:
     SessionCreated: {description: Account created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
     Session: {description: Authenticated session, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
@@ -436,6 +492,8 @@ components:
     AdminAlreadyBootstrapped: {description: Initial admin exists, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     MovieNotFound: {description: Movie not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ShowtimeNotFound: {description: Showtime not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ShowtimeReferenceNotFound: {description: Showtime, movie, or studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ShowtimeInUse: {description: Showtime has dependent inventory or orders, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     CinemaNotFound: {description: Cinema not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     StudioNotFound: {description: Studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatNotFound: {description: Seat not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -486,6 +544,22 @@ components:
         movies:
           type: array
           items: {$ref: '#/components/schemas/Movie'}
+    AdminShowtime:
+      type: object
+      required: [id, movie_id, studio_id, starts_at, ends_at, base_price, currency]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        movie_id: {$ref: '#/components/schemas/UUID'}
+        studio_id: {$ref: '#/components/schemas/UUID'}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        base_price: {type: string}
+        currency: {type: string}
+    AdminShowtimeList:
+      type: object
+      required: [showtimes]
+      properties:
+        showtimes: {type: array, items: {$ref: '#/components/schemas/AdminShowtime'}}
     Cinema:
       type: object
       required: [id, name, address, city]

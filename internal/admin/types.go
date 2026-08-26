@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -22,6 +23,12 @@ var (
 	ErrInvalidMovieInput = errors.New("invalid movie input")
 	// ErrMovieNotFound indicates a movie does not exist.
 	ErrMovieNotFound = errors.New("movie not found")
+	// ErrInvalidShowtimeInput indicates invalid showtime metadata.
+	ErrInvalidShowtimeInput = errors.New("invalid showtime input")
+	// ErrShowtimeNotFound indicates a showtime does not exist.
+	ErrShowtimeNotFound = errors.New("showtime not found")
+	// ErrShowtimeInUse indicates a showtime has dependent inventory or orders.
+	ErrShowtimeInUse = errors.New("showtime in use")
 )
 
 // Cinema is an administrator-managed cinema location.
@@ -53,6 +60,24 @@ type Movie struct {
 	Synopsis        *string
 	PosterURL       *string
 	ReleaseDate     *string
+}
+
+// Showtime is an administrator-managed screening and its pricing snapshot source.
+type Showtime struct {
+	ID        string
+	MovieID   string
+	StudioID  string
+	StartsAt  time.Time
+	EndsAt    time.Time
+	BasePrice string
+	Currency  string
+}
+
+// ShowtimeSeat is one materialized physical seat for a showtime.
+type ShowtimeSeat struct {
+	SeatID      string
+	PriceAmount string
+	Currency    string
 }
 
 // AuditEvent records a privileged administrative action.
@@ -128,6 +153,29 @@ type UpdateMovieInput struct {
 	ReleaseDate     *string
 }
 
+// CreateShowtimeInput contains data for an administrator-created showtime.
+type CreateShowtimeInput struct {
+	ActorUserID string
+	MovieID     string
+	StudioID    string
+	StartsAt    time.Time
+	EndsAt      time.Time
+	BasePrice   string
+	Currency    string
+}
+
+// UpdateShowtimeInput contains replacement data for a showtime.
+type UpdateShowtimeInput struct {
+	ActorUserID string
+	ID          string
+	MovieID     string
+	StudioID    string
+	StartsAt    time.Time
+	EndsAt      time.Time
+	BasePrice   string
+	Currency    string
+}
+
 // Repository persists cinema data and its matching audit event atomically.
 type Repository interface {
 	CreateCinema(context.Context, Cinema, AuditEvent) (Cinema, error)
@@ -147,4 +195,8 @@ type Repository interface {
 	ListMovies(context.Context) ([]Movie, error)
 	UpdateMovie(context.Context, Movie, AuditEvent) (Movie, error)
 	DeleteMovie(context.Context, string, AuditEvent) error
+	CreateShowtime(context.Context, Showtime, AuditEvent) (Showtime, error)
+	ListShowtimes(context.Context) ([]Showtime, error)
+	UpdateShowtime(context.Context, Showtime, AuditEvent) (Showtime, error)
+	DeleteShowtime(context.Context, string, AuditEvent) error
 }

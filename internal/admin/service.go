@@ -18,6 +18,9 @@ const (
 	uuidVersion4     = 0x40
 	uuidVariantMask  = 0x3f
 	uuidVariantRFC   = 0x80
+	pricePrecision   = 2
+	priceTotalDigits = 12
+	currencyCodeSize = 3
 )
 
 // Service applies administrator cinema management rules.
@@ -217,6 +220,44 @@ func (s *Service) DeleteMovie(ctx context.Context, actorUserID, id string) error
 	})
 }
 
+// CreateShowtime validates, creates, materializes, and audits a showtime.
+func (s *Service) CreateShowtime(ctx context.Context, input CreateShowtimeInput) (Showtime, error) {
+	return s.saveShowtime(ctx, "", input, "CREATE")
+}
+
+// ListShowtimes returns all configured showtimes.
+func (s *Service) ListShowtimes(ctx context.Context) ([]Showtime, error) {
+	return s.repository.ListShowtimes(ctx)
+}
+
+// UpdateShowtime replaces a showtime and its materialized seat snapshot.
+func (s *Service) UpdateShowtime(ctx context.Context, input UpdateShowtimeInput) (Showtime, error) {
+	return s.saveShowtime(ctx, input.ID, CreateShowtimeInput{
+		ActorUserID: input.ActorUserID,
+		MovieID:     input.MovieID,
+		StudioID:    input.StudioID,
+		StartsAt:    input.StartsAt,
+		EndsAt:      input.EndsAt,
+		BasePrice:   input.BasePrice,
+		Currency:    input.Currency,
+	}, "UPDATE")
+}
+
+// DeleteShowtime removes a showtime and records an audit event.
+func (s *Service) DeleteShowtime(ctx context.Context, actorUserID, id string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	id = strings.TrimSpace(id)
+	if actorUserID == "" || id == "" {
+		return ErrInvalidShowtimeInput
+	}
+	return s.repository.DeleteShowtime(ctx, id, AuditEvent{
+		ActorUserID: actorUserID,
+		EntityType:  "SHOWTIME",
+		EntityID:    id,
+		Action:      "DELETE",
+	})
+}
+
 func (s *Service) saveStudio(ctx context.Context, id, actorID, cinemaID, name, action string) (Studio, error) {
 	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(cinemaID) == "" || strings.TrimSpace(name) == "" {
 		return Studio{}, ErrInvalidCinemaInput
@@ -337,6 +378,86 @@ func optionalReleaseDate(value *string) (*string, error) {
 	}
 	normalized := date.Format(time.DateOnly)
 	return &normalized, nil
+}
+
+func (s *Service) saveShowtime(
+	ctx context.Context,
+	id string,
+	input CreateShowtimeInput,
+	action string,
+) (Showtime, error) {
+	actorUserID := strings.TrimSpace(input.ActorUserID)
+	id = strings.TrimSpace(id)
+	movieID := strings.TrimSpace(input.MovieID)
+	studioID := strings.TrimSpace(input.StudioID)
+	basePrice, err := normalizePrice(input.BasePrice)
+	if actorUserID == "" || movieID == "" || studioID == "" || input.StartsAt.IsZero() || input.EndsAt.IsZero() ||
+		!input.StartsAt.Before(input.EndsAt) || action == "UPDATE" && id == "" || err != nil {
+		return Showtime{}, ErrInvalidShowtimeInput
+	}
+	currency, ok := normalizeCurrency(input.Currency)
+	if !ok {
+		return Showtime{}, ErrInvalidShowtimeInput
+	}
+	if id == "" {
+		id, err = s.newID()
+		if err != nil {
+			return Showtime{}, fmt.Errorf("generate showtime id: %w", err)
+		}
+	}
+	showtime := Showtime{
+		ID:        id,
+		MovieID:   movieID,
+		StudioID:  studioID,
+		StartsAt:  input.StartsAt.UTC(),
+		EndsAt:    input.EndsAt.UTC(),
+		BasePrice: basePrice,
+		Currency:  currency,
+	}
+	audit := AuditEvent{ActorUserID: actorUserID, EntityType: "SHOWTIME", EntityID: id, Action: action}
+	if action == "CREATE" {
+		return s.repository.CreateShowtime(ctx, showtime, audit)
+	}
+	return s.repository.UpdateShowtime(ctx, showtime, audit)
+}
+
+func normalizePrice(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	whole, fraction, hasFraction := strings.Cut(value, ".")
+	invalidFraction := hasFraction && (fraction == "" || len(fraction) > pricePrecision || !decimalDigits(fraction))
+	if whole == "" || !decimalDigits(whole) || invalidFraction {
+		return "", ErrInvalidShowtimeInput
+	}
+	if len(whole)+len(fraction) > priceTotalDigits {
+		return "", ErrInvalidShowtimeInput
+	}
+	whole = strings.TrimLeft(whole, "0")
+	if whole == "" {
+		whole = "0"
+	}
+	return whole + "." + fraction + strings.Repeat("0", pricePrecision-len(fraction)), nil
+}
+
+func decimalDigits(value string) bool {
+	for i := range value {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeCurrency(value string) (string, bool) {
+	currency := strings.ToUpper(strings.TrimSpace(value))
+	if len(currency) != currencyCodeSize {
+		return "", false
+	}
+	for i := range currency {
+		if currency[i] < 'A' || currency[i] > 'Z' {
+			return "", false
+		}
+	}
+	return currency, true
 }
 
 func newCinemaID() (string, error) {

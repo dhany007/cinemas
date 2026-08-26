@@ -8,22 +8,121 @@ import (
 
 // MemoryRepository is a concurrency-safe repository used by tests.
 type MemoryRepository struct {
-	mu      sync.Mutex
-	audits  []AuditEvent
-	cinemas map[string]Cinema
-	studios map[string]Studio
-	seats   map[string]Seat
-	movies  map[string]Movie
+	mu            sync.Mutex
+	audits        []AuditEvent
+	cinemas       map[string]Cinema
+	studios       map[string]Studio
+	seats         map[string]Seat
+	movies        map[string]Movie
+	showtimes     map[string]Showtime
+	showtimeSeats map[string][]ShowtimeSeat
 }
 
 // NewMemoryRepository creates an empty test repository.
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		cinemas: make(map[string]Cinema),
-		studios: make(map[string]Studio),
-		seats:   make(map[string]Seat),
-		movies:  make(map[string]Movie),
+		cinemas:       make(map[string]Cinema),
+		studios:       make(map[string]Studio),
+		seats:         make(map[string]Seat),
+		movies:        make(map[string]Movie),
+		showtimes:     make(map[string]Showtime),
+		showtimeSeats: make(map[string][]ShowtimeSeat),
 	}
+}
+
+// CreateShowtime stores a showtime, materializes its seats, and records an audit event.
+func (r *MemoryRepository) CreateShowtime(ctx context.Context, showtime Showtime, audit AuditEvent) (Showtime, error) {
+	if err := ctx.Err(); err != nil {
+		return Showtime{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.movies[showtime.MovieID]; !found {
+		return Showtime{}, ErrMovieNotFound
+	}
+	if _, found := r.studios[showtime.StudioID]; !found {
+		return Showtime{}, ErrStudioNotFound
+	}
+	r.showtimes[showtime.ID] = showtime
+	r.showtimeSeats[showtime.ID] = r.materializeShowtimeSeats(showtime)
+	r.audits = append(r.audits, audit)
+	return showtime, nil
+}
+
+// ListShowtimes returns stored showtimes in start-time and ID order.
+func (r *MemoryRepository) ListShowtimes(ctx context.Context) ([]Showtime, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	showtimes := make([]Showtime, 0, len(r.showtimes))
+	for _, showtime := range r.showtimes {
+		showtimes = append(showtimes, showtime)
+	}
+	sort.Slice(showtimes, func(i, j int) bool {
+		if showtimes[i].StartsAt.Equal(showtimes[j].StartsAt) {
+			return showtimes[i].ID < showtimes[j].ID
+		}
+		return showtimes[i].StartsAt.Before(showtimes[j].StartsAt)
+	})
+	return showtimes, nil
+}
+
+// UpdateShowtime replaces a showtime, rematerializes its seats, and records an audit event.
+func (r *MemoryRepository) UpdateShowtime(ctx context.Context, showtime Showtime, audit AuditEvent) (Showtime, error) {
+	if err := ctx.Err(); err != nil {
+		return Showtime{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.showtimes[showtime.ID]; !found {
+		return Showtime{}, ErrShowtimeNotFound
+	}
+	if _, found := r.movies[showtime.MovieID]; !found {
+		return Showtime{}, ErrMovieNotFound
+	}
+	if _, found := r.studios[showtime.StudioID]; !found {
+		return Showtime{}, ErrStudioNotFound
+	}
+	r.showtimes[showtime.ID] = showtime
+	r.showtimeSeats[showtime.ID] = r.materializeShowtimeSeats(showtime)
+	r.audits = append(r.audits, audit)
+	return showtime, nil
+}
+
+// DeleteShowtime removes a showtime and its materialized seats, then records an audit event.
+func (r *MemoryRepository) DeleteShowtime(ctx context.Context, id string, audit AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, found := r.showtimes[id]; !found {
+		return ErrShowtimeNotFound
+	}
+	delete(r.showtimes, id)
+	delete(r.showtimeSeats, id)
+	r.audits = append(r.audits, audit)
+	return nil
+}
+
+// ShowtimeSeats returns a test snapshot of materialized inventory.
+func (r *MemoryRepository) ShowtimeSeats(showtimeID string) []ShowtimeSeat {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ShowtimeSeat(nil), r.showtimeSeats[showtimeID]...)
+}
+
+func (r *MemoryRepository) materializeShowtimeSeats(showtime Showtime) []ShowtimeSeat {
+	seats := make([]ShowtimeSeat, 0)
+	for _, seat := range r.seats {
+		if seat.StudioID == showtime.StudioID {
+			seats = append(seats, ShowtimeSeat{SeatID: seat.ID, PriceAmount: showtime.BasePrice, Currency: showtime.Currency})
+		}
+	}
+	sort.Slice(seats, func(i, j int) bool { return seats[i].SeatID < seats[j].SeatID })
+	return seats
 }
 
 // CreateMovie stores a movie and its audit event.
