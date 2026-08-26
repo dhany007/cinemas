@@ -59,7 +59,7 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 - [x] Return ordered items, showtime summary, payment state, ticket state, and hold expiry without leaking another customer's data.
 - [x] Implement pending-hold expiry processing that marks orders expired and releases seats.
 - [x] Add cancellation rules for unpaid holds, if still allowed before expiry.
-- [ ] Add PostgreSQL concurrency tests for duplicate requests, competing seat selections, and hold expiry.
+- [x] Add PostgreSQL concurrency tests for duplicate requests, competing seat selections, and hold expiry.
 
 **Done when:** customers can view the result of every checkout attempt, expired holds release inventory, and concurrent access has database-backed tests.
 
