@@ -45,6 +45,8 @@ The smoke test starts a separate PostgreSQL container without publishing a host 
 
 ## Implemented API
 
+The versioned API contract is [openapi/openapi.yaml](openapi/openapi.yaml). Update it with every client-visible endpoint or response change.
+
 `GET /v1/movies` returns public movie metadata in deterministic newest-first order. It accepts an optional `limit` from `1` to `100` (default `20`) and an opaque `cursor`; pass `next_cursor` from one response as the next request's `cursor` value. A malformed limit or cursor returns `400 INVALID_REQUEST`.
 
 `GET /v1/movies/{movieId}/showtimes?date=YYYY-MM-DD` returns public screenings for a UUID movie on the supplied UTC calendar date. Each screening includes the cinema and studio, start/end times, and price. A missing movie returns `404 MOVIE_NOT_FOUND`; malformed IDs or dates return `400 INVALID_REQUEST`.

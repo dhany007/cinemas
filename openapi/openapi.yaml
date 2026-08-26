@@ -1,0 +1,289 @@
+openapi: 3.1.0
+info:
+  title: Cinemas API
+  version: 0.1.0
+  description: API contract for the Cinema ticketing backend.
+servers:
+  - url: http://127.0.0.1:18081
+paths:
+  /healthz:
+    get:
+      summary: Check API liveness
+      responses:
+        '200':
+          description: API is live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, example: ok}
+  /v1/auth/register:
+    post:
+      summary: Register a customer
+      requestBody: {$ref: '#/components/requestBodies/Register'}
+      responses:
+        '201': {$ref: '#/components/responses/SessionCreated'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '409': {$ref: '#/components/responses/EmailAlreadyRegistered'}
+  /v1/auth/login:
+    post:
+      summary: Log in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email}
+                password: {type: string, format: password}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/InvalidCredentials'}
+  /v1/auth/bootstrap-admin:
+    post:
+      summary: Bootstrap the one initial administrator
+      parameters:
+        - name: X-Admin-Bootstrap-Token
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody: {$ref: '#/components/requestBodies/Register'}
+      responses:
+        '201': {$ref: '#/components/responses/SessionCreated'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '409': {$ref: '#/components/responses/AdminAlreadyBootstrapped'}
+  /v1/movies:
+    get:
+      summary: List public movies
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: cursor
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Movies in deterministic newest-first order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [movies]
+                properties:
+                  movies:
+                    type: array
+                    items: {$ref: '#/components/schemas/Movie'}
+                  next_cursor: {type: string}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+  /v1/movies/{movieID}/showtimes:
+    get:
+      summary: List public showtimes for a movie and UTC date
+      parameters:
+        - $ref: '#/components/parameters/MovieID'
+        - name: date
+          in: query
+          required: true
+          schema: {type: string, format: date}
+      responses:
+        '200':
+          description: Movie showtimes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [movie_id, date, showtimes]
+                properties:
+                  movie_id: {$ref: '#/components/schemas/UUID'}
+                  date: {type: string, format: date}
+                  showtimes:
+                    type: array
+                    items: {$ref: '#/components/schemas/Showtime'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/MovieNotFound'}
+  /v1/showtimes/{showtimeID}/seats:
+    get:
+      summary: Get public seat availability for a showtime
+      parameters: [{$ref: '#/components/parameters/ShowtimeID'}]
+      responses:
+        '200':
+          description: Seat map without owner or hold details
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [showtime_id, seats]
+                properties:
+                  showtime_id: {$ref: '#/components/schemas/UUID'}
+                  seats:
+                    type: array
+                    items: {$ref: '#/components/schemas/Seat'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/ShowtimeNotFound'}
+  /v1/orders:
+    post:
+      summary: Create an idempotent seat hold for the authenticated customer
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [showtime_id, seat_ids]
+              properties:
+                showtime_id: {$ref: '#/components/schemas/UUID'}
+                seat_ids:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: {$ref: '#/components/schemas/UUID'}
+      responses:
+        '201':
+          description: Seats are held pending payment
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderHold'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/SeatOrIdempotencyConflict'}
+  /v1/orders/{orderID}/payment-intents:
+    post:
+      summary: Complete an authenticated customer's order with the local fake provider
+      description: Development-only endpoint; a production provider must use a verified asynchronous webhook.
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/OrderID'}]
+      responses:
+        '201':
+          description: Payment completed and tickets issued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Payment'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/OrderNotFound'}
+        '409': {$ref: '#/components/responses/OrderNotPayable'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    MovieID: {name: movieID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
+    ShowtimeID: {name: showtimeID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
+    OrderID: {name: orderID, in: path, required: true, schema: {$ref: '#/components/schemas/UUID'}}
+  requestBodies:
+    Register:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password, display_name]
+            properties:
+              email: {type: string, format: email}
+              password: {type: string, format: password, minLength: 12}
+              display_name: {type: string, minLength: 1, maxLength: 100}
+  responses:
+    SessionCreated: {description: Account created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+    Session: {description: Authenticated session, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+    InvalidRequest: {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Unauthenticated: {description: Missing or invalid credential, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Forbidden: {description: Insufficient role, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    InvalidCredentials: {description: Incorrect email or password, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    EmailAlreadyRegistered: {description: Duplicate email, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    AdminAlreadyBootstrapped: {description: Initial admin exists, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    MovieNotFound: {description: Movie not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ShowtimeNotFound: {description: Showtime not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    OrderNotFound: {description: Order not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    OrderNotPayable: {description: Order cannot be paid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatOrIdempotencyConflict: {description: Seat unavailable or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  schemas:
+    UUID: {type: string, format: uuid}
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+    User:
+      type: object
+      required: [id, email, display_name, role]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        role: {type: string, enum: [CUSTOMER, ADMIN]}
+    Session:
+      type: object
+      required: [access_token, token_type, user]
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, enum: [Bearer]}
+        user: {$ref: '#/components/schemas/User'}
+    Movie:
+      type: object
+      required: [id, title, duration_minutes]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        title: {type: string}
+        duration_minutes: {type: integer}
+        rating: {type: string}
+        synopsis: {type: string}
+        poster_url: {type: string, format: uri}
+        release_date: {type: string, format: date}
+    Showtime:
+      type: object
+      required: [id, studio_id, studio_name, cinema_id, cinema_name, cinema_city, starts_at, ends_at, base_price, currency]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        studio_id: {$ref: '#/components/schemas/UUID'}
+        studio_name: {type: string}
+        cinema_id: {$ref: '#/components/schemas/UUID'}
+        cinema_name: {type: string}
+        cinema_city: {type: string}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        base_price: {type: string}
+        currency: {type: string}
+    Seat:
+      type: object
+      required: [id, row_label, seat_number, seat_type, price_amount, currency, status]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        row_label: {type: string}
+        seat_number: {type: string}
+        seat_type: {type: string}
+        price_amount: {type: string}
+        currency: {type: string}
+        status: {type: string, enum: [AVAILABLE, HELD, SOLD, BLOCKED]}
+    OrderHold:
+      type: object
+      required: [id, status, expires_at, seat_ids]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        status: {type: string, enum: [PENDING_PAYMENT]}
+        expires_at: {type: string, format: date-time}
+        seat_ids: {type: array, items: {$ref: '#/components/schemas/UUID'}}
+    Payment:
+      type: object
+      required: [provider, reference, status, amount, currency, paid_at]
+      properties:
+        provider: {type: string, enum: [FAKE]}
+        reference: {type: string}
+        status: {type: string, enum: [SUCCEEDED]}
+        amount: {type: string}
+        currency: {type: string}
+        paid_at: {type: string, format: date-time}
