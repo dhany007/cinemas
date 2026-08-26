@@ -18,6 +18,8 @@ The API listens on `:8080` by default. Set `ADDR` to override it. `GET /healthz`
 
 ## Implemented API
 
+`GET /v1/showtimes/{showtimeId}/seats` returns the public seat map for a UUID showtime. Each seat includes its price and current availability (`AVAILABLE`, `HELD`, `SOLD`, or `BLOCKED`); expired holds are returned as `AVAILABLE`. The response does not expose an order or hold owner.
+
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires an `Idempotency-Key` header and a JSON body:
 
 ```json

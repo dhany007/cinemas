@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/citradigital/cinemas/internal/booking"
+	"github.com/citradigital/cinemas/internal/seatinventory"
 )
 
 func TestServerCreateOrderHold(t *testing.T) {
@@ -47,6 +48,74 @@ func TestServerCreateOrderHoldReturnsStableValidationError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewBufferString(`{}`))
 	request.Header.Set("Content-Type", "application/json")
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if want := `"code":"INVALID_REQUEST"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerGetShowtimeSeats(t *testing.T) {
+	showtimeID := "10000000-0000-4000-8000-000000000001"
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(map[string][]seatinventory.Seat{
+		showtimeID: {
+			{
+				ID:          "seat-a",
+				RowLabel:    "A",
+				SeatNumber:  "1",
+				SeatType:    "STANDARD",
+				PriceAmount: "50000.00",
+				Currency:    "IDR",
+				Status:      "AVAILABLE",
+			},
+		},
+	}))
+	server := NewServerWithSeatMap(bookingService, seatMapService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/showtimes/"+showtimeID+"/seats", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if want := `"price_amount":"50000.00"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+	if want := `"status":"AVAILABLE"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerGetShowtimeSeatsReturnsNotFound(t *testing.T) {
+	showtimeID := "10000000-0000-4000-8000-000000000002"
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	server := NewServerWithSeatMap(bookingService, seatMapService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/showtimes/"+showtimeID+"/seats", nil)
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if want := `"code":"SHOWTIME_NOT_FOUND"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerGetShowtimeSeatsReturnsValidationErrorForInvalidShowtimeID(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	seatMapService := seatinventory.NewService(seatinventory.NewMemoryRepository(nil))
+	server := NewServerWithSeatMap(bookingService, seatMapService)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/showtimes/not-a-uuid/seats", nil)
 
 	server.ServeHTTP(recorder, request)
 

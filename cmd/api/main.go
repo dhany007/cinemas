@@ -13,6 +13,7 @@ import (
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/httpapi"
 	"github.com/citradigital/cinemas/internal/postgres"
+	"github.com/citradigital/cinemas/internal/seatinventory"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,9 +48,10 @@ func main() {
 	}
 
 	bookingService := booking.NewService(postgres.NewBookingRepository(pool), defaultHoldDuration, time.Now)
+	seatMapService := seatinventory.NewService(postgres.NewSeatMapRepository(pool))
 	server := &http.Server{
 		Addr:              environmentOr("ADDR", ":8080"),
-		Handler:           httpapi.NewServer(bookingService),
+		Handler:           httpapi.NewServerWithSeatMap(bookingService, seatMapService),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
