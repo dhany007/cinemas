@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  relative-path-mode: gomod
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - lll
+    - makezero
+    - misspell
+    - mnd
+    - nilerr
+    - nolintlint
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unused
+    - wastedassign
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    lll:
+      line-length: 120
+      tab-width: 1
+    misspell:
+      locale: US
+      ignore-rules:
+        - cancelled
+  exclusions:
+    rules:
+      - linters:
+          - revive
+        text: package-comments
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

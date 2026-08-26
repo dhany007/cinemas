@@ -19,7 +19,12 @@ func TestServerCreateOrderHold(t *testing.T) {
 	)
 	server := NewServer(service)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewBufferString(`{"user_id":"user-1","showtime_id":"showtime-1","seat_ids":["seat-a"]}`))
+	requestBody := `{"user_id":"user-1","showtime_id":"showtime-1","seat_ids":["seat-a"]}`
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/orders",
+		bytes.NewBufferString(requestBody),
+	)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "checkout-1")
 

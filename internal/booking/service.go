@@ -10,11 +10,23 @@ import (
 	"time"
 )
 
+const (
+	uuidByteLength   = 16
+	uuidVersionIndex = 6
+	uuidVariantIndex = 8
+	uuidVersionMask  = 0x0f
+	uuidVersion4     = 0x40
+	uuidVariantMask  = 0x3f
+	uuidVariantRFC   = 0x80
+)
+
+// Repository persists idempotent order holds and exposes existing orders.
 type Repository interface {
 	FindOrderByIdempotency(ctx context.Context, userID, key string) (Order, bool, error)
 	CreateHold(ctx context.Context, order Order, now time.Time) (Order, error)
 }
 
+// Service applies the business rules for booking seat holds.
 type Service struct {
 	repository   Repository
 	holdDuration time.Duration
@@ -22,6 +34,7 @@ type Service struct {
 	newID        func() (string, error)
 }
 
+// NewService creates a booking service with the supplied persistence and clock.
 func NewService(repository Repository, holdDuration time.Duration, clock func() time.Time) *Service {
 	return &Service{
 		repository:   repository,
@@ -31,6 +44,7 @@ func NewService(repository Repository, holdDuration time.Duration, clock func() 
 	}
 }
 
+// CreateHold reserves every requested seat or returns a conflict without a partial hold.
 func (s *Service) CreateHold(ctx context.Context, input CreateHoldInput) (Order, error) {
 	if err := ctx.Err(); err != nil {
 		return Order{}, err
@@ -119,12 +133,12 @@ func sameHoldRequest(order Order, showtimeID string, seatIDs []string) bool {
 }
 
 func randomID() (string, error) {
-	bytes := make([]byte, 16)
+	bytes := make([]byte, uuidByteLength)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	bytes[6] = bytes[6]&0x0f | 0x40
-	bytes[8] = bytes[8]&0x3f | 0x80
+	bytes[uuidVersionIndex] = bytes[uuidVersionIndex]&uuidVersionMask | uuidVersion4
+	bytes[uuidVariantIndex] = bytes[uuidVariantIndex]&uuidVariantMask | uuidVariantRFC
 	return fmt.Sprintf(
 		"%s-%s-%s-%s-%s",
 		hex.EncodeToString(bytes[0:4]),

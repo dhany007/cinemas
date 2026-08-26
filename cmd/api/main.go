@@ -16,6 +16,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	databasePingTimeout = 5 * time.Second
+	defaultHoldDuration = 10 * time.Minute
+	readHeaderTimeout   = 5 * time.Second
+	shutdownTimeout     = 10 * time.Second
+)
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -29,20 +36,21 @@ func main() {
 		logger.Error("create PostgreSQL pool", "error", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
 
-	pingContext, cancelPing := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelPing()
-	if err := pool.Ping(pingContext); err != nil {
+	pingContext, cancelPing := context.WithTimeout(context.Background(), databasePingTimeout)
+	err = pool.Ping(pingContext)
+	cancelPing()
+	if err != nil {
+		pool.Close()
 		logger.Error("ping PostgreSQL", "error", err)
 		os.Exit(1)
 	}
 
-	bookingService := booking.NewService(postgres.NewBookingRepository(pool), 10*time.Minute, time.Now)
+	bookingService := booking.NewService(postgres.NewBookingRepository(pool), defaultHoldDuration, time.Now)
 	server := &http.Server{
 		Addr:              environmentOr("ADDR", ":8080"),
 		Handler:           httpapi.NewServer(bookingService),
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	shutdown := make(chan os.Signal, 1)
@@ -56,18 +64,22 @@ func main() {
 	select {
 	case signal := <-shutdown:
 		logger.Info("shutting down API", "signal", signal.String())
-		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancelShutdown()
-		if err := server.Shutdown(shutdownContext); err != nil {
-			logger.Error("shutdown API", "error", err)
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+		shutdownErr := server.Shutdown(shutdownContext)
+		cancelShutdown()
+		if shutdownErr != nil {
+			pool.Close()
+			logger.Error("shutdown API", "error", shutdownErr)
 			os.Exit(1)
 		}
 	case err := <-serverErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
+			pool.Close()
 			logger.Error("serve API", "error", err)
 			os.Exit(1)
 		}
 	}
+	pool.Close()
 }
 
 func environmentOr(name, fallback string) string {

@@ -12,15 +12,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// BookingRepository persists booking holds in PostgreSQL.
 type BookingRepository struct {
 	pool *pgxpool.Pool
 }
 
+// NewBookingRepository creates a PostgreSQL-backed booking repository.
 func NewBookingRepository(pool *pgxpool.Pool) *BookingRepository {
 	return &BookingRepository{pool: pool}
 }
 
-func (r *BookingRepository) FindOrderByIdempotency(ctx context.Context, userID, key string) (booking.Order, bool, error) {
+// FindOrderByIdempotency returns the existing order for a user and idempotency key.
+func (r *BookingRepository) FindOrderByIdempotency(
+	ctx context.Context,
+	userID, key string,
+) (booking.Order, bool, error) {
 	order, err := findOrderByIdempotency(ctx, r.pool, userID, key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return booking.Order{}, false, nil
@@ -31,7 +37,12 @@ func (r *BookingRepository) FindOrderByIdempotency(ctx context.Context, userID, 
 	return order, true, nil
 }
 
-func (r *BookingRepository) CreateHold(ctx context.Context, order booking.Order, nowTime time.Time) (booking.Order, error) {
+// CreateHold atomically creates an order and marks its requested seats held.
+func (r *BookingRepository) CreateHold(
+	ctx context.Context,
+	order booking.Order,
+	nowTime time.Time,
+) (booking.Order, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return booking.Order{}, fmt.Errorf("begin booking transaction: %w", err)

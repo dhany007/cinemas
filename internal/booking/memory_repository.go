@@ -6,12 +6,14 @@ import (
 	"time"
 )
 
+// MemoryRepository is a concurrency-safe repository used by unit and API tests.
 type MemoryRepository struct {
 	mu                  sync.RWMutex
 	seats               map[string]Seat
 	ordersByIdempotency map[string]Order
 }
 
+// NewMemoryRepository creates an in-memory repository with the supplied seat inventory.
 func NewMemoryRepository(seats []Seat) *MemoryRepository {
 	repository := &MemoryRepository{
 		seats:               make(map[string]Seat, len(seats)),
@@ -23,6 +25,7 @@ func NewMemoryRepository(seats []Seat) *MemoryRepository {
 	return repository
 }
 
+// FindOrderByIdempotency returns the order previously created for a user and key.
 func (r *MemoryRepository) FindOrderByIdempotency(_ context.Context, userID, key string) (Order, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -31,6 +34,7 @@ func (r *MemoryRepository) FindOrderByIdempotency(_ context.Context, userID, key
 	return copyOrder(order), ok, nil
 }
 
+// CreateHold atomically stores an order and marks all its seats held.
 func (r *MemoryRepository) CreateHold(ctx context.Context, order Order, now time.Time) (Order, error) {
 	if err := ctx.Err(); err != nil {
 		return Order{}, err
@@ -65,6 +69,7 @@ func (r *MemoryRepository) CreateHold(ctx context.Context, order Order, now time
 	return copyOrder(order), nil
 }
 
+// Seat returns the current state of a test seat.
 func (r *MemoryRepository) Seat(id string) (Seat, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -9,10 +9,12 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// Server exposes the booking HTTP API.
 type Server struct {
 	e *echo.Echo
 }
 
+// NewServer creates an Echo server backed by the booking service.
 func NewServer(bookingService *booking.Service) *Server {
 	e := echo.New()
 	e.HideBanner = true
@@ -90,11 +92,21 @@ func (s *Server) createOrderHold(service *booking.Service) echo.HandlerFunc {
 func writeBookingError(c echo.Context, err error) error {
 	switch {
 	case errors.Is(err, booking.ErrInvalidHoldInput):
-		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "user, showtime, and at least one unique seat are required")
+		return writeError(
+			c,
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"user, showtime, and at least one unique seat are required",
+		)
 	case errors.Is(err, booking.ErrSeatUnavailable):
 		return writeError(c, http.StatusConflict, "SEAT_UNAVAILABLE", "one or more selected seats are no longer available")
 	case errors.Is(err, booking.ErrIdempotencyKeyReused):
-		return writeError(c, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was used with a different request")
+		return writeError(
+			c,
+			http.StatusConflict,
+			"IDEMPOTENCY_KEY_REUSED",
+			"Idempotency-Key was used with a different request",
+		)
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to create order")
 	}
