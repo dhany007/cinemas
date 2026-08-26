@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cinemas
+      POSTGRES_USER: cinemas
+      POSTGRES_PASSWORD: cinemas
+    ports:
+      - "127.0.0.1:${CINEMAS_POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - cinemas_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cinemas -d cinemas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://cinemas:cinemas@postgres:5432/cinemas?sslmode=disable
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./scripts/migrate.sh:/scripts/migrate.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/migrate.sh"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ADDR: :8080
+      DATABASE_URL: postgresql://cinemas:cinemas@postgres:5432/cinemas?sslmode=disable
+      AUTH_JWT_SECRET: local-development-jwt-secret-change-me
+      AUTH_ACCESS_TOKEN_TTL: 1h
+      AUTH_ADMIN_BOOTSTRAP_TOKEN: local-admin-bootstrap-token
+    ports:
+      - "127.0.0.1:${CINEMAS_API_PORT:-18081}:8080"
+
+volumes:
+  cinemas_postgres_data:

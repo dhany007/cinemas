@@ -17,6 +17,18 @@ The backend is a Go/Echo API for cinema seat holds. PostgreSQL is the source of 
 
 The API listens on `:8080` by default. Set `ADDR` to override it. `GET /healthz` is the liveness endpoint.
 
+## Run with Docker Compose
+
+For local development, Docker Compose starts PostgreSQL, applies pending SQL migrations exactly once, then starts the API:
+
+```text
+docker compose up --build
+```
+
+The API is available at `http://127.0.0.1:18081/healthz` and PostgreSQL is available only on `127.0.0.1:54329` by default. Override those host ports with `CINEMAS_API_PORT` and `CINEMAS_POSTGRES_PORT`.
+
+The Compose database credentials and authentication secrets are local-development values only. Never reuse them in staging or production. To stop the stack while preserving local data, run `docker compose down`. `docker compose down -v` also deletes the local database volume.
+
 ## Implemented API
 
 `GET /v1/movies` returns public movie metadata in deterministic newest-first order. It accepts an optional `limit` from `1` to `100` (default `20`) and an opaque `cursor`; pass `next_cursor` from one response as the next request's `cursor` value. A malformed limit or cursor returns `400 INVALID_REQUEST`.

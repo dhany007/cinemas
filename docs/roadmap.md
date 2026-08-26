@@ -19,14 +19,14 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 - [x] Customer registration/login and protected admin bootstrap using password hashes and access tokens.
 - [x] Customer ownership enforcement for checkout and fake payment.
 - [x] Remove the `STAFF` role from the current role constraint through a forward migration.
-- [ ] Run all migrations, including authentication migrations, against a disposable PostgreSQL database.
+- [x] Run all migrations, including authentication migrations, against a disposable PostgreSQL database.
 - [ ] Add CI and a documented local development environment.
 
 ## Stage 1 — Platform Safety and Delivery Foundation
 
 **Goal:** make the existing backend reproducible and safe to change.
 
-- [ ] Provide local Docker Compose for PostgreSQL and the API.
+- [x] Provide local Docker Compose for PostgreSQL and the API.
 - [ ] Add a documented migration command and an ephemeral PostgreSQL migration smoke test.
 - [ ] Add CI for formatting, linting, tests, build, and migration validation.
 - [ ] Add an API error/response contract document or OpenAPI specification.
