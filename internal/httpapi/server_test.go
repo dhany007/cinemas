@@ -305,6 +305,52 @@ func TestServerRejectsCustomerCinemaManagement(t *testing.T) {
 	}
 }
 
+func TestServerAdminStudioCRUD(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	//nolint:lll // Test authentication setup is clearer inline.
+	authenticationService := auth.NewService(auth.NewMemoryRepository(), []byte("01234567890123456789012345678901"), time.Hour, time.Now)
+	adminSession, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{
+		Email: "studio-admin@example.com", Password: "correct horse battery staple", DisplayName: "Administrator",
+	})
+	if err != nil {
+		t.Fatalf("RegisterAdmin() error = %v", err)
+	}
+	adminRepository := admin.NewMemoryRepository()
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(adminRepository))
+	//nolint:lll // The request fixture is intentionally visible.
+	createCinema := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/cinemas", `{"name":"Central Cinema","address":"Jl. Example 1","city":"Jakarta"}`, adminSession.AccessToken)
+	var cinema cinemaResponse
+	if err := json.Unmarshal(createCinema.Body.Bytes(), &cinema); err != nil {
+		t.Fatalf("unmarshal cinema: %v", err)
+	}
+	//nolint:lll // The request fixture is intentionally visible.
+	createStudio := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/studios", `{"cinema_id":"`+cinema.ID+`","name":"Studio 1"}`, adminSession.AccessToken)
+	if createStudio.Code != http.StatusCreated {
+		t.Fatalf("create studio status = %d, body = %s", createStudio.Code, createStudio.Body.String())
+	}
+	var studio struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createStudio.Body.Bytes(), &studio); err != nil {
+		t.Fatalf("unmarshal studio: %v", err)
+	}
+	listStudio := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/studios", "", adminSession.AccessToken)
+	if listStudio.Code != http.StatusOK {
+		t.Fatalf("list studio status = %d, body = %s", listStudio.Code, listStudio.Body.String())
+	}
+	//nolint:lll // The request fixture is intentionally visible.
+	updateStudio := serveAdminCinemaRequest(server, http.MethodPatch, "/v1/admin/studios/"+studio.ID, `{"cinema_id":"`+cinema.ID+`","name":"Studio 2"}`, adminSession.AccessToken)
+	if updateStudio.Code != http.StatusOK {
+		t.Fatalf("update studio status = %d, body = %s", updateStudio.Code, updateStudio.Body.String())
+	}
+	//nolint:lll // The path is a direct composition of the created ID.
+	deleteStudio := serveAdminCinemaRequest(server, http.MethodDelete, "/v1/admin/studios/"+studio.ID, "", adminSession.AccessToken)
+	if deleteStudio.Code != http.StatusNoContent {
+		t.Fatalf("delete studio status = %d, body = %s", deleteStudio.Code, deleteStudio.Body.String())
+	}
+}
+
 func serveAdminCinemaRequest(
 	server *Server,
 	method string,

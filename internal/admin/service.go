@@ -106,6 +106,47 @@ func (s *Service) DeleteCinema(ctx context.Context, actorUserID, id string) erro
 	return s.repository.DeleteCinema(ctx, id, audit)
 }
 
+// CreateStudio validates, creates, and audits a studio.
+func (s *Service) CreateStudio(ctx context.Context, input CreateStudioInput) (Studio, error) {
+	return s.saveStudio(ctx, "", input.ActorUserID, input.CinemaID, input.Name, "CREATE")
+}
+
+// ListStudios returns all configured studios.
+func (s *Service) ListStudios(ctx context.Context) ([]Studio, error) {
+	return s.repository.ListStudios(ctx)
+}
+
+// UpdateStudio replaces a studio and records an audit event.
+func (s *Service) UpdateStudio(ctx context.Context, input UpdateStudioInput) (Studio, error) {
+	return s.saveStudio(ctx, input.ID, input.ActorUserID, input.CinemaID, input.Name, "UPDATE")
+}
+
+// DeleteStudio removes a studio and records an audit event.
+func (s *Service) DeleteStudio(ctx context.Context, actorID, id string) error {
+	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(id) == "" {
+		return ErrInvalidCinemaInput
+	}
+	return s.repository.DeleteStudio(ctx, id, AuditEvent{ActorUserID: actorID, EntityType: "STUDIO", EntityID: id, Action: "DELETE"}) //nolint:lll // Audit event stays visible at the call site.
+}
+func (s *Service) saveStudio(ctx context.Context, id, actorID, cinemaID, name, action string) (Studio, error) {
+	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(cinemaID) == "" || strings.TrimSpace(name) == "" {
+		return Studio{}, ErrInvalidCinemaInput
+	}
+	if id == "" {
+		var err error
+		id, err = s.newID()
+		if err != nil {
+			return Studio{}, err
+		}
+	}
+	studio := Studio{ID: id, CinemaID: strings.TrimSpace(cinemaID), Name: strings.TrimSpace(name)}
+	audit := AuditEvent{ActorUserID: actorID, EntityType: "STUDIO", EntityID: id, Action: action}
+	if action == "CREATE" {
+		return s.repository.CreateStudio(ctx, studio, audit)
+	}
+	return s.repository.UpdateStudio(ctx, studio, audit)
+}
+
 func newCinemaID() (string, error) {
 	bytes := make([]byte, uuidByteLength)
 	if _, err := rand.Read(bytes); err != nil {

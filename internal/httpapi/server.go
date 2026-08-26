@@ -159,6 +159,11 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 		"/v1/admin/cinemas/:cinemaID",
 		s.requireRole(authenticationService, auth.RoleAdmin, s.deleteCinema(service)),
 	)
+	s.e.GET("/v1/admin/studios", s.requireRole(authenticationService, auth.RoleAdmin, s.listStudios(service)))
+	s.e.POST("/v1/admin/studios", s.requireRole(authenticationService, auth.RoleAdmin, s.createStudio(service)))
+	s.e.PATCH("/v1/admin/studios/:studioID", s.requireRole(authenticationService, auth.RoleAdmin, s.updateStudio(service)))
+	//nolint:lll // Route authorization remains explicit.
+	s.e.DELETE("/v1/admin/studios/:studioID", s.requireRole(authenticationService, auth.RoleAdmin, s.deleteStudio(service)))
 }
 
 type createOrderRequest struct {
@@ -193,6 +198,18 @@ type cinemaResponse struct {
 
 type cinemaListResponse struct {
 	Cinemas []cinemaResponse `json:"cinemas"`
+}
+type studioRequest struct {
+	CinemaID string `json:"cinema_id"`
+	Name     string `json:"name"`
+}
+type studioResponse struct {
+	ID       string `json:"id"`
+	CinemaID string `json:"cinema_id"`
+	Name     string `json:"name"`
+}
+type studioListResponse struct {
+	Studios []studioResponse `json:"studios"`
 }
 
 type seatMapResponse struct {
@@ -441,6 +458,82 @@ func writeCinemaError(c echo.Context, err error, operation string) error {
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" cinema")
 	}
+}
+
+func (s *Server) createStudio(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var req studioRequest
+		if err := c.Bind(&req); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		studio, err := service.CreateStudio(c.Request().Context(), adminservice.CreateStudioInput{ActorUserID: identity.UserID, CinemaID: req.CinemaID, Name: req.Name}) //nolint:lll // Transport fields are mapped together.
+		if err != nil {
+			return writeStudioError(c, err)
+		}
+		return c.JSON(http.StatusCreated, toStudioResponse(studio))
+	}
+}
+func (s *Server) listStudios(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		studios, err := service.ListStudios(c.Request().Context())
+		if err != nil {
+			return writeStudioError(c, err)
+		}
+		result := make([]studioResponse, len(studios))
+		for i, studio := range studios {
+			result[i] = toStudioResponse(studio)
+		}
+		return c.JSON(http.StatusOK, studioListResponse{Studios: result})
+	}
+}
+func (s *Server) updateStudio(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		id := c.Param("studioID")
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var req studioRequest
+		if err := c.Bind(&req); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		studio, err := service.UpdateStudio(c.Request().Context(), adminservice.UpdateStudioInput{ActorUserID: identity.UserID, ID: id, CinemaID: req.CinemaID, Name: req.Name}) //nolint:lll // Transport fields are mapped together.
+		if err != nil {
+			return writeStudioError(c, err)
+		}
+		return c.JSON(http.StatusOK, toStudioResponse(studio))
+	}
+}
+func (s *Server) deleteStudio(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		if err := service.DeleteStudio(c.Request().Context(), identity.UserID, c.Param("studioID")); err != nil {
+			return writeStudioError(c, err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+func toStudioResponse(s adminservice.Studio) studioResponse {
+	return studioResponse{ID: s.ID, CinemaID: s.CinemaID, Name: s.Name}
+}
+func writeStudioError(c echo.Context, err error) error {
+	if errors.Is(err, adminservice.ErrStudioNotFound) {
+		return writeError(c, http.StatusNotFound, "STUDIO_NOT_FOUND", "studio was not found")
+	}
+	if errors.Is(err, adminservice.ErrCinemaNotFound) {
+		return writeError(c, http.StatusNotFound, "CINEMA_NOT_FOUND", "cinema was not found")
+	}
+	if errors.Is(err, adminservice.ErrInvalidCinemaInput) {
+		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "cinema ID and name are required")
+	}
+	return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to manage studio")
 }
 
 func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {

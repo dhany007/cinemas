@@ -11,11 +11,62 @@ type MemoryRepository struct {
 	mu      sync.Mutex
 	audits  []AuditEvent
 	cinemas map[string]Cinema
+	studios map[string]Studio
 }
 
 // NewMemoryRepository creates an empty test repository.
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{cinemas: make(map[string]Cinema)}
+	return &MemoryRepository{cinemas: make(map[string]Cinema), studios: make(map[string]Studio)}
+}
+
+// CreateStudio stores a studio and audit event.
+func (r *MemoryRepository) CreateStudio(_ context.Context, s Studio, a AuditEvent) (Studio, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.cinemas[s.CinemaID]; !ok {
+		return Studio{}, ErrCinemaNotFound
+	}
+	r.studios[s.ID] = s
+	r.audits = append(r.audits, a)
+	return s, nil
+}
+
+// ListStudios returns stored studios.
+func (r *MemoryRepository) ListStudios(context.Context) ([]Studio, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]Studio, 0, len(r.studios))
+	for _, s := range r.studios {
+		result = append(result, s)
+	}
+	return result, nil
+}
+
+// UpdateStudio replaces a stored studio and adds an audit event.
+func (r *MemoryRepository) UpdateStudio(_ context.Context, s Studio, a AuditEvent) (Studio, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.studios[s.ID]; !ok {
+		return Studio{}, ErrStudioNotFound
+	}
+	if _, ok := r.cinemas[s.CinemaID]; !ok {
+		return Studio{}, ErrCinemaNotFound
+	}
+	r.studios[s.ID] = s
+	r.audits = append(r.audits, a)
+	return s, nil
+}
+
+// DeleteStudio removes a stored studio and adds an audit event.
+func (r *MemoryRepository) DeleteStudio(_ context.Context, id string, a AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.studios[id]; !ok {
+		return ErrStudioNotFound
+	}
+	delete(r.studios, id)
+	r.audits = append(r.audits, a)
+	return nil
 }
 
 // CreateCinema stores a cinema and audit event together.

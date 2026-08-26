@@ -101,6 +101,36 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/CinemaNotFound'}
+  /v1/admin/studios:
+    get:
+      summary: List studios
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Studios, content: {application/json: {schema: {$ref: '#/components/schemas/StudioList'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a studio
+      security: [{bearerAuth: []}]
+      requestBody: {$ref: '#/components/requestBodies/StudioWrite'}
+      responses:
+        '201': {description: Studio created, content: {application/json: {schema: {$ref: '#/components/schemas/Studio'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/CinemaNotFound'}
+  /v1/admin/studios/{studioID}:
+    patch:
+      summary: Replace a studio
+      security: [{bearerAuth: []}]
+      requestBody: {$ref: '#/components/requestBodies/StudioWrite'}
+      responses:
+        '200': {description: Studio updated, content: {application/json: {schema: {$ref: '#/components/schemas/Studio'}}}}
+        '404': {$ref: '#/components/responses/StudioNotFound'}
+    delete:
+      summary: Delete a studio
+      security: [{bearerAuth: []}]
+      responses:
+        '204': {description: Studio deleted}
+        '404': {$ref: '#/components/responses/StudioNotFound'}
     patch:
       summary: Replace a cinema's name and location
       security: [{bearerAuth: []}]
@@ -277,6 +307,16 @@ components:
               name: {type: string, minLength: 1}
               address: {type: string, minLength: 1}
               city: {type: string, minLength: 1}
+    StudioWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [cinema_id, name]
+            properties:
+              cinema_id: {$ref: '#/components/schemas/UUID'}
+              name: {type: string, minLength: 1}
   responses:
     SessionCreated: {description: Account created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
     Session: {description: Authenticated session, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
@@ -289,6 +329,7 @@ components:
     MovieNotFound: {description: Movie not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ShowtimeNotFound: {description: Showtime not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     CinemaNotFound: {description: Cinema not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    StudioNotFound: {description: Studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotFound: {description: Order not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotPayable: {description: Order cannot be paid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatOrIdempotencyConflict: {description: Seat unavailable or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -343,6 +384,18 @@ components:
         cinemas:
           type: array
           items: {$ref: '#/components/schemas/Cinema'}
+    Studio:
+      type: object
+      required: [id, cinema_id, name]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        cinema_id: {$ref: '#/components/schemas/UUID'}
+        name: {type: string}
+    StudioList:
+      type: object
+      required: [studios]
+      properties:
+        studios: {type: array, items: {$ref: '#/components/schemas/Studio'}}
     Showtime:
       type: object
       required: [id, studio_id, studio_name, cinema_id, cinema_name, cinema_city, starts_at, ends_at, base_price, currency]

@@ -177,3 +177,87 @@ func insertCinemaAuditEvent(ctx context.Context, tx pgx.Tx, audit admin.AuditEve
 	}
 	return nil
 }
+
+// CreateStudio stores a studio and audit event atomically.
+//
+//nolint:lll // Repository interface parameters are explicit.
+func (r *AdminRepository) CreateStudio(ctx context.Context, studio admin.Studio, audit admin.AuditEvent) (admin.Studio, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return admin.Studio{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `INSERT INTO studios (id, cinema_id, name) VALUES ($1,$2,$3)`, studio.ID, studio.CinemaID, studio.Name); err != nil { //nolint:lll // SQL mutation is kept together.
+		return admin.Studio{}, err
+	}
+	if err = insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Studio{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return admin.Studio{}, err
+	}
+	return studio, nil
+}
+
+// ListStudios returns stored studios.
+func (r *AdminRepository) ListStudios(ctx context.Context) ([]admin.Studio, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id::text,cinema_id::text,name FROM studios ORDER BY name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []admin.Studio
+	for rows.Next() {
+		var s admin.Studio
+		if err := rows.Scan(&s.ID, &s.CinemaID, &s.Name); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// UpdateStudio replaces a studio and audit event atomically.
+//
+//nolint:lll // Repository interface parameters are explicit.
+func (r *AdminRepository) UpdateStudio(ctx context.Context, studio admin.Studio, audit admin.AuditEvent) (admin.Studio, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return admin.Studio{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE studios SET cinema_id=$2,name=$3,updated_at=now() WHERE id=$1`, studio.ID, studio.CinemaID, studio.Name) //nolint:lll // SQL mutation is kept together.
+	if err != nil {
+		return admin.Studio{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.Studio{}, admin.ErrStudioNotFound
+	}
+	if err = insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return admin.Studio{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return admin.Studio{}, err
+	}
+	return studio, nil
+}
+
+// DeleteStudio removes a studio and records its audit event atomically.
+func (r *AdminRepository) DeleteStudio(ctx context.Context, id string, audit admin.AuditEvent) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `DELETE FROM studios WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return admin.ErrStudioNotFound
+	}
+	if err = insertCinemaAuditEvent(ctx, tx, audit); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
