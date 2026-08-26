@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/citradigital/cinemas/internal/admin"
 	"github.com/citradigital/cinemas/internal/auth"
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
@@ -76,17 +77,19 @@ func main() {
 		authenticationConfig.accessTokenTTL,
 		time.Now,
 	)
+	api := httpapi.NewServerWithAllFeatures(
+		bookingService,
+		seatMapService,
+		movieCatalogService,
+		showtimeService,
+		paymentService,
+		authenticationService,
+		authenticationConfig.adminBootstrapToken,
+	)
+	api.EnableAdminCinemaRoutes(authenticationService, admin.NewService(postgres.NewAdminRepository(pool)))
 	server := &http.Server{
-		Addr: environmentOr("ADDR", ":8080"),
-		Handler: httpapi.NewServerWithAllFeatures(
-			bookingService,
-			seatMapService,
-			movieCatalogService,
-			showtimeService,
-			paymentService,
-			authenticationService,
-			authenticationConfig.adminBootstrapToken,
-		),
+		Addr:              environmentOr("ADDR", ":8080"),
+		Handler:           api,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	adminservice "github.com/citradigital/cinemas/internal/admin"
 	"github.com/citradigital/cinemas/internal/auth"
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
@@ -148,6 +149,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.e.ServeHTTP(writer, request)
 }
 
+// EnableAdminCinemaRoutes exposes the initial administrator-only cinema creation route.
+func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, service *adminservice.Service) {
+	s.e.POST("/v1/admin/cinemas", s.requireRole(authenticationService, auth.RoleAdmin, s.createCinema(service)))
+}
+
 type createOrderRequest struct {
 	ShowtimeID string   `json:"showtime_id"`
 	SeatIDs    []string `json:"seat_ids"`
@@ -164,6 +170,18 @@ type errorResponse struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id,omitempty"`
+}
+
+type createCinemaRequest struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	City    string `json:"city"`
+}
+type cinemaResponse struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	City    string `json:"city"`
 }
 
 type seatMapResponse struct {
@@ -285,6 +303,34 @@ func (s *Server) createOrderHold(service *booking.Service) echo.HandlerFunc {
 			Status:    order.Status,
 			ExpiresAt: order.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 			SeatIDs:   seatIDs,
+		})
+	}
+}
+
+func (s *Server) createCinema(service *adminservice.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		var request createCinemaRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		cinema, err := service.CreateCinema(c.Request().Context(), adminservice.CreateCinemaInput{
+			ActorUserID: identity.UserID,
+			Name:        request.Name,
+			Address:     request.Address,
+			City:        request.City,
+		})
+		if errors.Is(err, adminservice.ErrInvalidCinemaInput) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "name, address, and city are required")
+		}
+		if err != nil {
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to create cinema")
+		}
+		return c.JSON(http.StatusCreated, cinemaResponse{
+			ID: cinema.ID, Name: cinema.Name, Address: cinema.Address, City: cinema.City,
 		})
 	}
 }
