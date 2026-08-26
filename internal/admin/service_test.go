@@ -219,6 +219,30 @@ func TestServiceManagesShowtimeAndMaterializesSeats(t *testing.T) {
 	if len(materialized) != 1 || materialized[0].SeatID != seat.ID || materialized[0].PriceAmount != "50000.00" {
 		t.Fatalf("materialized seats = %#v, want one priced physical seat", materialized)
 	}
+	_, err = service.CreateSeat(ctx, CreateSeatInput{
+		ActorUserID: actorUserID,
+		StudioID:    studio.ID,
+		RowLabel:    "A",
+		SeatNumber:  "2",
+		SeatType:    "STANDARD",
+	})
+	if !errors.Is(err, ErrSeatLayoutInUse) {
+		t.Fatalf("CreateSeat() after showtime error = %v, want ErrSeatLayoutInUse", err)
+	}
+	_, err = service.UpdateSeat(ctx, UpdateSeatInput{
+		ActorUserID: actorUserID,
+		ID:          seat.ID,
+		StudioID:    studio.ID,
+		RowLabel:    "B",
+		SeatNumber:  "1",
+		SeatType:    "PREMIUM",
+	})
+	if !errors.Is(err, ErrSeatLayoutInUse) {
+		t.Fatalf("UpdateSeat() after showtime error = %v, want ErrSeatLayoutInUse", err)
+	}
+	if err := service.DeleteSeat(ctx, actorUserID, seat.ID); !errors.Is(err, ErrSeatLayoutInUse) {
+		t.Fatalf("DeleteSeat() after showtime error = %v, want ErrSeatLayoutInUse", err)
+	}
 	_, err = service.CreateShowtime(ctx, CreateShowtimeInput{
 		ActorUserID: actorUserID,
 		MovieID:     movie.ID,

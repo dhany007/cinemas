@@ -643,6 +643,22 @@ func TestServerAdminShowtimeCRUD(t *testing.T) {
 	server.EnableAdminCinemaRoutes(authenticationService, admin.NewService(admin.NewMemoryRepository()))
 	cinema := createAdminCinema(t, server, adminSession.AccessToken)
 	studio := createAdminStudio(t, server, cinema.ID, adminSession.AccessToken)
+	seatRecorder := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/seats",
+		`{"studio_id":"`+studio.ID+`","row_label":"A","seat_number":"1","seat_type":"STANDARD"}`,
+		adminSession.AccessToken,
+	)
+	if seatRecorder.Code != http.StatusCreated {
+		t.Fatalf("seat create status = %d, body = %s", seatRecorder.Code, seatRecorder.Body.String())
+	}
+	var seat struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(seatRecorder.Body.Bytes(), &seat); err != nil {
+		t.Fatalf("unmarshal created seat: %v", err)
+	}
 	movie := createAdminMovie(t, server, adminSession.AccessToken)
 	body := `{"movie_id":"` + movie.ID + `","studio_id":"` + studio.ID + `",` +
 		`"starts_at":"2026-08-26T10:00:00Z","ends_at":"2026-08-26T12:00:00Z",` +
@@ -665,6 +681,40 @@ func TestServerAdminShowtimeCRUD(t *testing.T) {
 	}
 	if !isUUID(created.ID) {
 		t.Fatalf("created showtime ID = %q, want UUID", created.ID)
+	}
+	blockedSeatBody := `{"studio_id":"` + studio.ID + `","row_label":"A","seat_number":"2","seat_type":"STANDARD"}`
+	blockedCreate := serveAdminCinemaRequest(
+		server,
+		http.MethodPost,
+		"/v1/admin/seats",
+		blockedSeatBody,
+		adminSession.AccessToken,
+	)
+	if blockedCreate.Code != http.StatusConflict {
+		t.Fatalf("seat create after showtime status = %d, body = %s", blockedCreate.Code, blockedCreate.Body.String())
+	}
+	if want := `"code":"SEAT_LAYOUT_IN_USE"`; !bytes.Contains(blockedCreate.Body.Bytes(), []byte(want)) {
+		t.Fatalf("seat create after showtime body = %s, want %s", blockedCreate.Body.String(), want)
+	}
+	blockedUpdate := serveAdminCinemaRequest(
+		server,
+		http.MethodPatch,
+		"/v1/admin/seats/"+seat.ID,
+		blockedSeatBody,
+		adminSession.AccessToken,
+	)
+	if blockedUpdate.Code != http.StatusConflict {
+		t.Fatalf("seat update after showtime status = %d, body = %s", blockedUpdate.Code, blockedUpdate.Body.String())
+	}
+	blockedDelete := serveAdminCinemaRequest(
+		server,
+		http.MethodDelete,
+		"/v1/admin/seats/"+seat.ID,
+		"",
+		adminSession.AccessToken,
+	)
+	if blockedDelete.Code != http.StatusConflict {
+		t.Fatalf("seat delete after showtime status = %d, body = %s", blockedDelete.Code, blockedDelete.Body.String())
 	}
 	overlapBody := `{"movie_id":"` + movie.ID + `","studio_id":"` + studio.ID + `",` +
 		`"starts_at":"2026-08-26T11:00:00Z","ends_at":"2026-08-26T13:00:00Z",` +

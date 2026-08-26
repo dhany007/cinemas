@@ -19,6 +19,8 @@ var (
 	ErrSeatNotFound = errors.New("seat not found")
 	// ErrSeatAlreadyExists indicates a studio already has the row and seat number.
 	ErrSeatAlreadyExists = errors.New("seat already exists")
+	// ErrSeatLayoutInUse indicates a studio has showtimes whose seat layout is immutable.
+	ErrSeatLayoutInUse = errors.New("seat layout in use")
 	// ErrInvalidMovieInput indicates invalid required or optional movie metadata.
 	ErrInvalidMovieInput = errors.New("invalid movie input")
 	// ErrMovieNotFound indicates a movie does not exist.

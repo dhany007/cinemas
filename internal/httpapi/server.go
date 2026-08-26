@@ -721,6 +721,8 @@ func writeSeatError(c echo.Context, err error, operation string) error {
 		return writeError(c, http.StatusNotFound, "SEAT_NOT_FOUND", "seat was not found")
 	case errors.Is(err, adminservice.ErrSeatAlreadyExists):
 		return writeError(c, http.StatusConflict, "SEAT_ALREADY_EXISTS", "seat position already exists in this studio")
+	case errors.Is(err, adminservice.ErrSeatLayoutInUse):
+		return writeError(c, http.StatusConflict, "SEAT_LAYOUT_IN_USE", "seat layout cannot change after a showtime exists")
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to "+operation+" seat")
 	}

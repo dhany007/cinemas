@@ -279,6 +279,9 @@ func (r *AdminRepository) CreateSeat(ctx context.Context, seat admin.Seat, audit
 		seat.SeatNumber,
 		seat.SeatType,
 	); err != nil {
+		if isSeatLayoutInUse(err) {
+			return admin.Seat{}, admin.ErrSeatLayoutInUse
+		}
 		if isSeatLayoutConflict(err) {
 			return admin.Seat{}, admin.ErrSeatAlreadyExists
 		}
@@ -340,6 +343,9 @@ func (r *AdminRepository) UpdateSeat(ctx context.Context, seat admin.Seat, audit
 		seat.SeatType,
 	)
 	if err != nil {
+		if isSeatLayoutInUse(err) {
+			return admin.Seat{}, admin.ErrSeatLayoutInUse
+		}
 		if isSeatLayoutConflict(err) {
 			return admin.Seat{}, admin.ErrSeatAlreadyExists
 		}
@@ -369,6 +375,9 @@ func (r *AdminRepository) DeleteSeat(ctx context.Context, id string, audit admin
 	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx, `DELETE FROM seats WHERE id = $1`, id)
 	if err != nil {
+		if isSeatLayoutInUse(err) {
+			return admin.ErrSeatLayoutInUse
+		}
 		return fmt.Errorf("delete seat: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -386,6 +395,12 @@ func (r *AdminRepository) DeleteSeat(ctx context.Context, id string, audit admin
 func isSeatLayoutConflict(err error) bool {
 	var databaseError *pgconn.PgError
 	return errors.As(err, &databaseError) && databaseError.Code == "23505"
+}
+
+func isSeatLayoutInUse(err error) bool {
+	var databaseError *pgconn.PgError
+	return errors.As(err, &databaseError) && databaseError.Code == "23514" &&
+		databaseError.ConstraintName == "seat_layout_locked_by_showtime"
 }
 
 func isForeignKeyViolation(err error) bool {

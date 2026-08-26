@@ -45,7 +45,7 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 - [x] Add authenticated admin-only CRUD for movies.
 - [x] Add authenticated admin-only CRUD for showtimes and materialize `showtime_seats`.
 - [x] Reject overlapping showtimes in one studio.
-- [ ] Prevent seat-layout changes that would invalidate active or historical showtimes.
+- [x] Prevent seat-layout changes that would invalidate active or historical showtimes.
 - [ ] Record administrator actions in `audit_events`.
 
 **Done when:** an admin can create a complete cinema, studio, seat layout, movie, and saleable showtime entirely through the API, with authorization and conflict tests.

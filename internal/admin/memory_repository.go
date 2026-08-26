@@ -215,6 +215,9 @@ func (r *MemoryRepository) CreateSeat(ctx context.Context, seat Seat, audit Audi
 	if _, found := r.studios[seat.StudioID]; !found {
 		return Seat{}, ErrStudioNotFound
 	}
+	if r.hasShowtimeInStudio(seat.StudioID) {
+		return Seat{}, ErrSeatLayoutInUse
+	}
 	if r.hasSeatLayoutPosition(seat) {
 		return Seat{}, ErrSeatAlreadyExists
 	}
@@ -256,11 +259,15 @@ func (r *MemoryRepository) UpdateSeat(ctx context.Context, seat Seat, audit Audi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, found := r.seats[seat.ID]; !found {
+	existing, found := r.seats[seat.ID]
+	if !found {
 		return Seat{}, ErrSeatNotFound
 	}
 	if _, found := r.studios[seat.StudioID]; !found {
 		return Seat{}, ErrStudioNotFound
+	}
+	if existing != seat && (r.hasShowtimeInStudio(existing.StudioID) || r.hasShowtimeInStudio(seat.StudioID)) {
+		return Seat{}, ErrSeatLayoutInUse
 	}
 	if r.hasSeatLayoutPosition(seat) {
 		return Seat{}, ErrSeatAlreadyExists
@@ -277,8 +284,12 @@ func (r *MemoryRepository) DeleteSeat(ctx context.Context, id string, audit Audi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, found := r.seats[id]; !found {
+	seat, found := r.seats[id]
+	if !found {
 		return ErrSeatNotFound
+	}
+	if r.hasShowtimeInStudio(seat.StudioID) {
+		return ErrSeatLayoutInUse
 	}
 	delete(r.seats, id)
 	r.audits = append(r.audits, audit)
@@ -289,6 +300,15 @@ func (r *MemoryRepository) hasSeatLayoutPosition(candidate Seat) bool {
 	for _, seat := range r.seats {
 		if seat.ID != candidate.ID && seat.StudioID == candidate.StudioID && seat.RowLabel == candidate.RowLabel &&
 			seat.SeatNumber == candidate.SeatNumber {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *MemoryRepository) hasShowtimeInStudio(studioID string) bool {
+	for _, showtime := range r.showtimes {
+		if showtime.StudioID == studioID {
 			return true
 		}
 	}

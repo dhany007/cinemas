@@ -174,7 +174,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/StudioNotFound'}
-        '409': {$ref: '#/components/responses/SeatAlreadyExists'}
+        '409': {$ref: '#/components/responses/SeatCreateConflict'}
   /v1/admin/seats/{seatID}:
     patch:
       summary: Replace a physical seat in a studio layout
@@ -187,7 +187,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/SeatNotFound'}
-        '409': {$ref: '#/components/responses/SeatAlreadyExists'}
+        '409': {$ref: '#/components/responses/SeatUpdateConflict'}
     delete:
       summary: Delete a physical seat from a studio layout
       security: [{bearerAuth: []}]
@@ -198,6 +198,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/SeatNotFound'}
+        '409': {$ref: '#/components/responses/SeatLayoutInUse'}
   /v1/admin/movies:
     get:
       summary: List administrator-managed movies
@@ -501,6 +502,9 @@ components:
     StudioNotFound: {description: Studio not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatNotFound: {description: Seat not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatAlreadyExists: {description: Seat position already exists in this studio, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatLayoutInUse: {description: A showtime exists for the affected studio, so its seat layout is immutable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatCreateConflict: {description: Seat position already exists or the studio's seat layout is immutable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    SeatUpdateConflict: {description: Seat position already exists or an affected studio's seat layout is immutable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotFound: {description: Order not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     OrderNotPayable: {description: Order cannot be paid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     SeatOrIdempotencyConflict: {description: Seat unavailable or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
