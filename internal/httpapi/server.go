@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/citradigital/cinemas/internal/auth"
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/payments"
@@ -21,7 +24,7 @@ type Server struct {
 
 // NewServer creates an Echo server backed by the booking service.
 func NewServer(bookingService *booking.Service) *Server {
-	return newServer(bookingService, nil, nil, nil, nil)
+	return newServer(bookingService, nil, nil, nil, nil, nil, "")
 }
 
 // NewServerWithSeatMap creates an Echo server with booking and seat-map routes.
@@ -29,7 +32,7 @@ func NewServerWithSeatMap(
 	bookingService *booking.Service,
 	seatMapService *seatinventory.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, nil, nil, nil)
+	return newServer(bookingService, seatMapService, nil, nil, nil, nil, "")
 }
 
 // NewServerWithMovieCatalog creates an Echo server with public catalog and seat-map routes.
@@ -38,7 +41,7 @@ func NewServerWithMovieCatalog(
 	seatMapService *seatinventory.Service,
 	movieCatalogService *catalog.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService, nil, nil)
+	return newServer(bookingService, seatMapService, movieCatalogService, nil, nil, nil, "")
 }
 
 // NewServerWithPublicCatalog creates an Echo server with public catalog and seat-map routes.
@@ -48,7 +51,7 @@ func NewServerWithPublicCatalog(
 	movieCatalogService *catalog.Service,
 	showtimeService *scheduling.Service,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService, nil)
+	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService, nil, nil, "")
 }
 
 // NewServerWithAllFeatures creates an Echo server with every currently implemented feature.
@@ -58,13 +61,32 @@ func NewServerWithAllFeatures(
 	movieCatalogService *catalog.Service,
 	showtimeService *scheduling.Service,
 	paymentService *payments.Service,
+	authenticationService *auth.Service,
+	adminBootstrapToken string,
 ) *Server {
-	return newServer(bookingService, seatMapService, movieCatalogService, showtimeService, paymentService)
+	return newServer(
+		bookingService,
+		seatMapService,
+		movieCatalogService,
+		showtimeService,
+		paymentService,
+		authenticationService,
+		adminBootstrapToken,
+	)
 }
 
 // NewServerWithFakePayments creates an Echo server with the local fake payment route.
 func NewServerWithFakePayments(bookingService *booking.Service, paymentService *payments.Service) *Server {
-	return newServer(bookingService, nil, nil, nil, paymentService)
+	return newServer(bookingService, nil, nil, nil, paymentService, nil, "")
+}
+
+// NewServerWithAuth creates an Echo server with customer authentication and protected checkout.
+func NewServerWithAuth(
+	bookingService *booking.Service,
+	authenticationService *auth.Service,
+	adminBootstrapToken string,
+) *Server {
+	return newServer(bookingService, nil, nil, nil, nil, authenticationService, adminBootstrapToken)
 }
 
 func newServer(
@@ -73,6 +95,8 @@ func newServer(
 	movieCatalogService *catalog.Service,
 	showtimeService *scheduling.Service,
 	paymentService *payments.Service,
+	authenticationService *auth.Service,
+	adminBootstrapToken string,
 ) *Server {
 	e := echo.New()
 	e.HideBanner = true
@@ -81,9 +105,23 @@ func newServer(
 
 	server := &Server{e: e}
 	e.GET("/healthz", server.health)
-	e.POST("/v1/orders", server.createOrderHold(bookingService))
+	if authenticationService == nil {
+		e.POST("/v1/orders", server.createOrderHold(bookingService))
+	} else {
+		e.POST("/v1/auth/register", server.register(authenticationService))
+		e.POST("/v1/auth/login", server.login(authenticationService))
+		e.POST("/v1/auth/bootstrap-admin", server.bootstrapAdmin(authenticationService, adminBootstrapToken))
+		e.POST(
+			"/v1/orders",
+			server.requireRole(authenticationService, auth.RoleCustomer, server.createOrderHold(bookingService)),
+		)
+	}
 	if paymentService != nil {
-		e.POST("/v1/orders/:orderID/payment-intents", server.createFakePayment(paymentService))
+		paymentHandler := server.createFakePayment(paymentService)
+		if authenticationService != nil {
+			paymentHandler = server.requireRole(authenticationService, auth.RoleCustomer, paymentHandler)
+		}
+		e.POST("/v1/orders/:orderID/payment-intents", paymentHandler)
 	}
 	if seatMapService != nil {
 		e.GET("/v1/showtimes/:showtimeID/seats", server.getShowtimeSeats(seatMapService))
@@ -102,7 +140,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 type createOrderRequest struct {
-	UserID     string   `json:"user_id"`
 	ShowtimeID string   `json:"showtime_id"`
 	SeatIDs    []string `json:"seat_ids"`
 }
@@ -178,6 +215,25 @@ type paymentResponse struct {
 	PaidAt    string `json:"paid_at"`
 }
 
+type authRequest struct {
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+type authResponse struct {
+	AccessToken string       `json:"access_token"`
+	TokenType   string       `json:"token_type"`
+	User        userResponse `json:"user"`
+}
+
+type userResponse struct {
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"display_name"`
+	Role        auth.Role `json:"role"`
+}
+
 const uuidLength = 36
 
 func (s *Server) health(c echo.Context) error {
@@ -196,8 +252,13 @@ func (s *Server) createOrderHold(service *booking.Service) echo.HandlerFunc {
 			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
 		}
 
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+
 		order, err := service.CreateHold(c.Request().Context(), booking.CreateHoldInput{
-			UserID:         request.UserID,
+			UserID:         identity.UserID,
 			ShowtimeID:     request.ShowtimeID,
 			SeatIDs:        request.SeatIDs,
 			IdempotencyKey: idempotencyKey,
@@ -226,7 +287,12 @@ func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
 			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "order ID must be a UUID")
 		}
 
-		payment, err := service.CreateFakePayment(c.Request().Context(), orderID)
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+
+		payment, err := service.CreateFakePayment(c.Request().Context(), orderID, identity.UserID)
 		if err != nil {
 			switch {
 			case errors.Is(err, payments.ErrOrderNotFound):
@@ -246,6 +312,108 @@ func (s *Server) createFakePayment(service *payments.Service) echo.HandlerFunc {
 			Currency:  payment.Currency,
 			PaidAt:    payment.PaidAt.Format(time.RFC3339),
 		})
+	}
+}
+
+func (s *Server) register(service *auth.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		var request authRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		session, err := service.Register(c.Request().Context(), toRegisterInput(request))
+		if err != nil {
+			return writeAuthError(c, err)
+		}
+		return c.JSON(http.StatusCreated, toAuthResponse(session))
+	}
+}
+
+func (s *Server) login(service *auth.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		var request authRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		session, err := service.Login(c.Request().Context(), auth.LoginInput{
+			Email:    request.Email,
+			Password: request.Password,
+		})
+		if err != nil {
+			return writeAuthError(c, err)
+		}
+		return c.JSON(http.StatusOK, toAuthResponse(session))
+	}
+}
+
+func (s *Server) bootstrapAdmin(service *auth.Service, bootstrapToken string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		providedToken := c.Request().Header.Get("X-Admin-Bootstrap-Token")
+		if bootstrapToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(bootstrapToken)) != 1 {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "bootstrap token is invalid")
+		}
+		var request authRequest
+		if err := c.Bind(&request); err != nil {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON")
+		}
+		session, err := service.RegisterAdmin(c.Request().Context(), toRegisterInput(request))
+		if err != nil {
+			return writeAuthError(c, err)
+		}
+		return c.JSON(http.StatusCreated, toAuthResponse(session))
+	}
+}
+
+func (s *Server) requireRole(service *auth.Service, role auth.Role, next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		accessToken, ok := bearerToken(c.Request().Header.Get(echo.HeaderAuthorization))
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		identity, err := service.Authenticate(c.Request().Context(), accessToken)
+		if err != nil {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is invalid or expired")
+		}
+		if identity.Role != role {
+			return writeError(c, http.StatusForbidden, "FORBIDDEN", "insufficient permissions")
+		}
+		c.Set("authenticated_identity", identity)
+		return next(c)
+	}
+}
+
+func bearerToken(value string) (string, bool) {
+	parts := strings.Fields(value)
+	returnToken := ""
+	if len(parts) == 2 && parts[0] == "Bearer" && parts[1] != "" {
+		returnToken = parts[1]
+	}
+	return returnToken, returnToken != ""
+}
+
+func authenticatedIdentity(c echo.Context) (auth.Identity, bool) {
+	identity, ok := c.Get("authenticated_identity").(auth.Identity)
+	return identity, ok
+}
+
+func toRegisterInput(request authRequest) auth.RegisterInput {
+	return auth.RegisterInput{
+		Email:       request.Email,
+		Password:    request.Password,
+		DisplayName: request.DisplayName,
+	}
+}
+
+func toAuthResponse(session auth.Session) authResponse {
+	return authResponse{
+		AccessToken: session.AccessToken,
+		TokenType:   "Bearer",
+		User: userResponse{
+			ID:          session.User.ID,
+			Email:       session.User.Email,
+			DisplayName: session.User.DisplayName,
+			Role:        session.User.Role,
+		},
 	}
 }
 
@@ -416,6 +584,21 @@ func writeBookingError(c echo.Context, err error) error {
 		)
 	default:
 		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to create order")
+	}
+}
+
+func writeAuthError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, auth.ErrInvalidInput):
+		return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "email, password, and display name are invalid")
+	case errors.Is(err, auth.ErrEmailAlreadyRegistered):
+		return writeError(c, http.StatusConflict, "EMAIL_ALREADY_REGISTERED", "email is already registered")
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		return writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "email or password is incorrect")
+	case errors.Is(err, auth.ErrAdminAlreadyBootstrapped):
+		return writeError(c, http.StatusConflict, "ADMIN_ALREADY_BOOTSTRAPPED", "an initial admin already exists")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to complete authentication")
 	}
 }
 

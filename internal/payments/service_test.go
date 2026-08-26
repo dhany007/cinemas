@@ -11,6 +11,7 @@ func TestServiceCreateFakePaymentSucceedsAndIssuesTickets(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
 	repository := NewMemoryRepository([]Order{{
 		ID:        "10000000-0000-4000-8000-000000000001",
+		UserID:    "40000000-0000-4000-8000-000000000001",
 		Status:    OrderPendingPayment,
 		ExpiresAt: now.Add(time.Minute),
 		Items: []OrderItem{{
@@ -22,14 +23,22 @@ func TestServiceCreateFakePaymentSucceedsAndIssuesTickets(t *testing.T) {
 	}})
 	service := NewService(repository, func() time.Time { return now })
 
-	payment, err := service.CreateFakePayment(context.Background(), "10000000-0000-4000-8000-000000000001")
+	payment, err := service.CreateFakePayment(
+		context.Background(),
+		"10000000-0000-4000-8000-000000000001",
+		"40000000-0000-4000-8000-000000000001",
+	)
 	if err != nil {
 		t.Fatalf("CreateFakePayment() error = %v", err)
 	}
 	if payment.Status != PaymentSucceeded || payment.Provider != FakeProvider {
 		t.Fatalf("payment = %#v, want succeeded fake payment", payment)
 	}
-	repeatedPayment, err := service.CreateFakePayment(context.Background(), "10000000-0000-4000-8000-000000000001")
+	repeatedPayment, err := service.CreateFakePayment(
+		context.Background(),
+		"10000000-0000-4000-8000-000000000001",
+		"40000000-0000-4000-8000-000000000001",
+	)
 	if err != nil {
 		t.Fatalf("CreateFakePayment() repeat error = %v", err)
 	}
@@ -46,7 +55,30 @@ func TestServiceCreateFakePaymentSucceedsAndIssuesTickets(t *testing.T) {
 func TestServiceCreateFakePaymentRejectsMissingOrder(t *testing.T) {
 	service := NewService(NewMemoryRepository(nil), time.Now)
 
-	_, err := service.CreateFakePayment(context.Background(), "10000000-0000-4000-8000-000000000002")
+	_, err := service.CreateFakePayment(
+		context.Background(),
+		"10000000-0000-4000-8000-000000000002",
+		"40000000-0000-4000-8000-000000000001",
+	)
+	if !errors.Is(err, ErrOrderNotFound) {
+		t.Fatalf("CreateFakePayment() error = %v, want ErrOrderNotFound", err)
+	}
+}
+
+func TestServiceCreateFakePaymentDoesNotExposeAnotherCustomersOrder(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
+	service := NewService(NewMemoryRepository([]Order{{
+		ID:        "10000000-0000-4000-8000-000000000001",
+		UserID:    "40000000-0000-4000-8000-000000000001",
+		Status:    OrderPendingPayment,
+		ExpiresAt: now.Add(time.Minute),
+	}}), func() time.Time { return now })
+
+	_, err := service.CreateFakePayment(
+		context.Background(),
+		"10000000-0000-4000-8000-000000000001",
+		"40000000-0000-4000-8000-000000000002",
+	)
 	if !errors.Is(err, ErrOrderNotFound) {
 		t.Fatalf("CreateFakePayment() error = %v, want ErrOrderNotFound", err)
 	}

@@ -29,6 +29,7 @@ func NewMemoryRepository(orders []Order) *MemoryRepository {
 func (r *MemoryRepository) CompleteFakePayment(
 	ctx context.Context,
 	orderID string,
+	userID string,
 	now time.Time,
 ) (Payment, error) {
 	if err := ctx.Err(); err != nil {
@@ -40,6 +41,9 @@ func (r *MemoryRepository) CompleteFakePayment(
 
 	order, ok := r.orders[orderID]
 	if !ok {
+		return Payment{}, ErrOrderNotFound
+	}
+	if order.UserID != userID {
 		return Payment{}, ErrOrderNotFound
 	}
 	if order.Status == OrderPaid {

@@ -2,7 +2,7 @@
 
 ## Scope
 
-The system lets customers browse films and showtimes, select seats, create an order, pay, receive a QR e-ticket, and lets staff check in tickets. The MVP supports one cinema operator, assigned seats, one currency, and one asynchronous payment gateway.
+The system lets customers browse films and showtimes, select seats, create an order, pay, and receive a QR e-ticket. An administrator manages cinema data. The MVP supports one cinema operator, assigned seats, one currency, and one asynchronous payment gateway.
 
 Multi-tenancy, complex promotions, loyalty programs, native mobile applications, and self-service refunds are out of scope for the MVP. The payment-gateway webhook—not the browser redirect—is the authoritative payment signal.
 
@@ -14,7 +14,7 @@ Browser
   ▼
 Next.js + TypeScript
   ├─ customer booking UI
-  └─ staff/admin UI
+  └─ admin UI
   │ HTTPS JSON API (/v1)
   ▼
 Go + Echo API
@@ -37,20 +37,20 @@ The API and worker are stateless processes. Echo handlers translate HTTP only; a
 
 | Module | Responsibility |
 | --- | --- |
-| `identity` | Customer, staff, and administrator identity and roles. |
+| `identity` | Customer and administrator identity, password credentials, and roles. |
 | `catalog` | Cinemas, studios, seat layouts, and movie metadata. |
 | `scheduling` | Showtimes, prices, and seat inventory creation. |
 | `seatinventory` | Availability lookup, holds, expiry, and final allocation. |
 | `orders` | Checkout lifecycle, ownership, and idempotency keys. |
 | `payments` | Payment intents, webhook verification, event deduplication, and payment state. |
-| `tickets` | QR ticket issuance and staff check-in. |
+| `tickets` | QR ticket issuance and future administrator-managed check-in. |
 | `outbox` | Notifications and reconciliation after a committed transaction. |
 
 ## Data Model
 
 | Table | Key relationships and purpose |
 | --- | --- |
-| `users` | Customer/staff/admin identity; unique email. |
+| `users` | Customer/admin identity; unique email and password hash. |
 | `user_roles` | FK `user_id`; unique `(user_id, role)`. |
 | `cinemas` | A cinema location. |
 | `studios` | FK `cinema_id`; a screening room within a cinema. |
@@ -97,21 +97,24 @@ OpenAPI is the contract source of truth, and every route is versioned under `/v1
 
 | Route | Authorization | Contract |
 | --- | --- | --- |
+| `POST /v1/auth/register` | Public | Creates a customer identity and returns a short-lived bearer token. |
+| `POST /v1/auth/login` | Public | Verifies email/password and returns a short-lived bearer token. |
+| `POST /v1/auth/bootstrap-admin` | Bootstrap secret | Creates the one initial admin only while the environment bootstrap secret is present. |
 | `GET /v1/movies` | Public | Movie list; use keyset pagination when needed. |
 | `GET /v1/showtimes/{showtimeId}/seats` | Public | Seat map, price, and availability; never expose a hold or order owner. |
 | `POST /v1/orders` | Customer | Creates a hold; `Idempotency-Key` is required. |
 | `GET /v1/orders/{orderId}` | Owner/admin | Returns the order, expiry, payment, and issued tickets. |
 | `POST /v1/orders/{orderId}/payment-intents` | Owner | Starts payment through the provider adapter. |
 | `POST /v1/webhooks/payments/{provider}` | Provider only | Verifies the signature and processes payment finalization idempotently. |
-| `GET /v1/tickets/{ticketCode}` | Owner/staff | Returns limited ticket detail. |
-| `POST /v1/tickets/{ticketCode}/check-in` | Staff/admin | Atomic `ISSUED → USED`; repeated scans conflict. |
+| `GET /v1/tickets/{ticketCode}` | Owner/admin | Returns limited ticket detail. |
+| `POST /v1/tickets/{ticketCode}/check-in` | Admin | Atomic `ISSUED → USED`; repeated scans conflict. |
 | Admin catalog routes | Admin | Manages cinemas, studios, movies, and showtimes. |
 
 Use a stable error envelope such as `{ "code": "SEAT_UNAVAILABLE", "message": "...", "request_id": "..." }`. Use `400` for malformed input, `401` for unauthenticated access, `403` for unauthorized access, `404` for a missing resource that may be revealed, `409` for seat/state/idempotency/check-in conflicts, `422` for business validation, and `5xx` for internal/provider failures.
 
 ## Security and Operations
 
-- Check ownership before reading an order or ticket; only staff and administrators may check in tickets or manage the catalog.
+- Check ownership before reading an order or ticket; only administrators may check in tickets or manage the catalog.
 - Verify webhook signatures. Never log passwords, tokens, authorization headers, raw QR secrets, payment payloads, or full PII.
 - QR codes carry an opaque or signed token; the server always verifies the current ticket state when scanning.
 - Apply rate limits to hold/order routes and webhooks when supported by the gateway.

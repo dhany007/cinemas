@@ -25,6 +25,7 @@ func NewPaymentsRepository(pool *pgxpool.Pool) *PaymentsRepository {
 func (r *PaymentsRepository) CompleteFakePayment(
 	ctx context.Context,
 	orderID string,
+	userID string,
 	now time.Time,
 ) (payments.Payment, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -38,8 +39,8 @@ func (r *PaymentsRepository) CompleteFakePayment(
 	if err := tx.QueryRow(ctx, `
 SELECT status, expires_at
 FROM orders
-WHERE id = $1
-FOR UPDATE`, orderID).Scan(&status, &expiresAt); errors.Is(err, pgx.ErrNoRows) {
+WHERE id = $1 AND user_id = $2
+FOR UPDATE`, orderID, userID).Scan(&status, &expiresAt); errors.Is(err, pgx.ErrNoRows) {
 		return payments.Payment{}, payments.ErrOrderNotFound
 	} else if err != nil {
 		return payments.Payment{}, fmt.Errorf("lock order: %w", err)

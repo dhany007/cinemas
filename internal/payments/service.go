@@ -19,15 +19,15 @@ func NewService(repository Repository, clock func() time.Time) *Service {
 }
 
 // CreateFakePayment completes an eligible order without an external gateway call.
-func (s *Service) CreateFakePayment(ctx context.Context, orderID string) (Payment, error) {
+func (s *Service) CreateFakePayment(ctx context.Context, orderID, userID string) (Payment, error) {
 	if err := ctx.Err(); err != nil {
 		return Payment{}, err
 	}
-	if strings.TrimSpace(orderID) == "" {
+	if strings.TrimSpace(orderID) == "" || strings.TrimSpace(userID) == "" {
 		return Payment{}, ErrOrderNotFound
 	}
 
-	payment, err := s.repository.CompleteFakePayment(ctx, orderID, s.clock().UTC())
+	payment, err := s.repository.CompleteFakePayment(ctx, orderID, userID, s.clock().UTC())
 	if err != nil {
 		return Payment{}, fmt.Errorf("complete fake payment: %w", err)
 	}

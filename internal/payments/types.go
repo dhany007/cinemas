@@ -55,6 +55,7 @@ type Ticket struct {
 // Order is the payment-relevant representation of a booking order.
 type Order struct {
 	ID        string
+	UserID    string
 	Status    OrderStatus
 	ExpiresAt time.Time
 	Items     []OrderItem
@@ -73,5 +74,5 @@ type Payment struct {
 
 // Repository atomically applies the fake-payment completion transition.
 type Repository interface {
-	CompleteFakePayment(ctx context.Context, orderID string, now time.Time) (Payment, error)
+	CompleteFakePayment(ctx context.Context, orderID, userID string, now time.Time) (Payment, error)
 }

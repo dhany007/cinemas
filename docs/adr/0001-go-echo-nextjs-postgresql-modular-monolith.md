@@ -6,12 +6,12 @@
 
 ## Context
 
-A cinema ticketing system handles monetary transactions and a highly contested resource: one seat for one showtime may only be sold once. The system needs a durable API boundary for the customer web application, staff tools, and future clients. There is no current evidence of service boundaries or team ownership that would justify microservices at the start.
+A cinema ticketing system handles monetary transactions and a highly contested resource: one seat for one showtime may only be sold once. The system needs a durable API boundary for the customer web application, administrator tools, and future clients. There is no current evidence of service boundaries or team ownership that would justify microservices at the start.
 
 ## Decision
 
 - Use the stable Go version available at implementation time and Echo v4 for the versioned REST API under `/v1`.
-- Use Next.js, TypeScript, and App Router for customer and staff/admin web applications.
+- Use Next.js, TypeScript, and App Router for customer and administrator web applications.
 - Use PostgreSQL 16+ or an equivalent managed PostgreSQL service as the transactional system of record.
 - Use `numeric(12,2)` for money and `timestamptz` for application timestamps.
 - Use an immutable Go SQL migration tool, preferably `goose`, and a PostgreSQL driver that supports `context.Context`.

@@ -2,17 +2,140 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/citradigital/cinemas/internal/auth"
 	"github.com/citradigital/cinemas/internal/booking"
 	"github.com/citradigital/cinemas/internal/catalog"
 	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
 )
+
+func TestServerRegistersCustomerAndUsesTokenIdentityForCheckout(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
+	bookingRepository := booking.NewMemoryRepository([]booking.Seat{{
+		ID: "seat-a", ShowtimeID: "showtime-1", Status: booking.SeatAvailable,
+	}})
+	bookingService := booking.NewService(bookingRepository, 10*time.Minute, func() time.Time { return now })
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		func() time.Time { return now },
+	)
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+
+	registerRecorder := httptest.NewRecorder()
+	registerRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/auth/register",
+		bytes.NewBufferString(
+			`{"email":"customer@example.com",`+
+				`"password":"correct horse battery staple","display_name":"Customer"}`,
+		),
+	)
+	registerRequest.Header.Set("Content-Type", "application/json")
+	server.ServeHTTP(registerRecorder, registerRequest)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf(
+			"register status = %d, want %d; body = %s",
+			registerRecorder.Code,
+			http.StatusCreated,
+			registerRecorder.Body.String(),
+		)
+	}
+
+	var registered struct {
+		AccessToken string `json:"access_token"`
+		User        struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &registered); err != nil {
+		t.Fatalf("unmarshal register response: %v", err)
+	}
+
+	orderRecorder := httptest.NewRecorder()
+	orderRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/orders",
+		bytes.NewBufferString(`{"user_id":"attacker-id","showtime_id":"showtime-1","seat_ids":["seat-a"]}`),
+	)
+	orderRequest.Header.Set("Content-Type", "application/json")
+	orderRequest.Header.Set("Idempotency-Key", "checkout-1")
+	orderRequest.Header.Set("Authorization", "Bearer "+registered.AccessToken)
+	server.ServeHTTP(orderRecorder, orderRequest)
+	if orderRecorder.Code != http.StatusCreated {
+		t.Fatalf("order status = %d, want %d; body = %s", orderRecorder.Code, http.StatusCreated, orderRecorder.Body.String())
+	}
+
+	order, found, err := bookingRepository.FindOrderByIdempotency(context.Background(), registered.User.ID, "checkout-1")
+	if err != nil || !found {
+		t.Fatalf("FindOrderByIdempotency() found = %t, err = %v", found, err)
+	}
+	if order.UserID != registered.User.ID {
+		t.Fatalf("order user ID = %q, want authenticated user %q", order.UserID, registered.User.ID)
+	}
+}
+
+func TestServerRejectsCheckoutWithoutAccessToken(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewBufferString(`{}`))
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	if want := `"code":"UNAUTHENTICATED"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
+
+func TestServerRejectsAdminBootstrapWithoutConfiguredToken(t *testing.T) {
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, time.Now)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		time.Now,
+	)
+	server := NewServerWithAuth(bookingService, authenticationService, "bootstrap-token")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/auth/bootstrap-admin",
+		bytes.NewBufferString(
+			`{"email":"admin@example.com",`+
+				`"password":"correct horse battery staple","display_name":"Admin"}`,
+		),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Admin-Bootstrap-Token", "wrong-token")
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	if want := `"code":"UNAUTHENTICATED"`; !bytes.Contains(recorder.Body.Bytes(), []byte(want)) {
+		t.Fatalf("response body = %s, want %s", recorder.Body.String(), want)
+	}
+}
 
 func TestServerCreateOrderHold(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
@@ -21,9 +144,23 @@ func TestServerCreateOrderHold(t *testing.T) {
 		10*time.Minute,
 		func() time.Time { return now },
 	)
-	server := NewServer(service)
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		func() time.Time { return now },
+	)
+	session, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email:       "customer@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Customer",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	server := NewServerWithAuth(service, authenticationService, "bootstrap-token")
 	recorder := httptest.NewRecorder()
-	requestBody := `{"user_id":"user-1","showtime_id":"showtime-1","seat_ids":["seat-a"]}`
+	requestBody := `{"showtime_id":"showtime-1","seat_ids":["seat-a"]}`
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/orders",
@@ -31,6 +168,7 @@ func TestServerCreateOrderHold(t *testing.T) {
 	)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "checkout-1")
+	request.Header.Set("Authorization", "Bearer "+session.AccessToken)
 
 	server.ServeHTTP(recorder, request)
 
@@ -282,8 +420,23 @@ func TestServerListMovieShowtimesReturnsNotFound(t *testing.T) {
 func TestServerCreateFakePayment(t *testing.T) {
 	now := time.Date(2026, time.August, 26, 10, 0, 0, 0, time.UTC)
 	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, func() time.Time { return now })
+	authenticationService := auth.NewService(
+		auth.NewMemoryRepository(),
+		[]byte("01234567890123456789012345678901"),
+		time.Hour,
+		func() time.Time { return now },
+	)
+	session, err := authenticationService.Register(context.Background(), auth.RegisterInput{
+		Email:       "customer@example.com",
+		Password:    "correct horse battery staple",
+		DisplayName: "Customer",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
 	paymentService := payments.NewService(payments.NewMemoryRepository([]payments.Order{{
 		ID:        "10000000-0000-4000-8000-000000000001",
+		UserID:    session.User.ID,
 		Status:    payments.OrderPendingPayment,
 		ExpiresAt: now.Add(time.Minute),
 		Items: []payments.OrderItem{{
@@ -293,13 +446,22 @@ func TestServerCreateFakePayment(t *testing.T) {
 			Currency:    "IDR",
 		}},
 	}}), func() time.Time { return now })
-	server := NewServerWithFakePayments(bookingService, paymentService)
+	server := NewServerWithAllFeatures(
+		bookingService,
+		nil,
+		nil,
+		nil,
+		paymentService,
+		authenticationService,
+		"bootstrap-token",
+	)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/orders/10000000-0000-4000-8000-000000000001/payment-intents",
 		nil,
 	)
+	request.Header.Set("Authorization", "Bearer "+session.AccessToken)
 
 	server.ServeHTTP(recorder, request)
 
