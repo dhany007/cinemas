@@ -1,12 +1,13 @@
-# Cinemas Backend
+# Cinemas
 
-The backend is a Go/Echo API for cinema seat holds. PostgreSQL is the source of truth for seat inventory and order state.
+The platform consists of a Go/Echo API, PostgreSQL as the source of truth for seat inventory and order state, and two Next.js applications.
 
 ## Prerequisites
 
 - Go 1.25 or a compatible later version
 - PostgreSQL 16+
 - A migration runner that executes the SQL files in `migrations/` in lexical order (the architecture recommends `goose`)
+- Node.js 20+ and pnpm 10+ for the web applications
 
 ## Run locally
 
@@ -16,6 +17,28 @@ The backend is a Go/Echo API for cinema seat holds. PostgreSQL is the source of 
 4. Run `go run ./cmd/api`.
 
 The API listens on `:8080` by default. Set `ADDR` to override it. `GET /healthz` is the liveness endpoint.
+
+## Run the web applications
+
+Start the API first (Docker Compose exposes it at `http://127.0.0.1:18081`), then install the JavaScript workspace dependencies once:
+
+```text
+pnpm install
+```
+
+Run the customer and administrator applications in separate terminals:
+
+```text
+API_BASE_URL=http://127.0.0.1:18081 pnpm dev:customer
+API_BASE_URL=http://127.0.0.1:18081 pnpm dev:admin
+```
+
+They are intentionally independent applications:
+
+- `apps/customer-web` provides the movie catalog, seat selection, hold/payment status, order history, and tickets.
+- `apps/admin-web` provides cinema and layout management, movie/showtime CRUD, ticket validation, and operational exception views.
+
+Both apps call their own `/api/backend/*` route handler from the browser. That server-side handler reads `API_BASE_URL` and the HTTP-only `cinemas_access_token` cookie, then adds the bearer token while forwarding to `/v1/*`. Do not set `API_BASE_URL` with a `NEXT_PUBLIC_` prefix and do not put API secrets or bearer tokens in browser code.
 
 ## Run with Docker Compose
 
@@ -82,4 +105,7 @@ Authentication errors use the standard error envelope: missing or invalid access
 go test ./...
 go vet ./...
 go build ./cmd/api
+pnpm typecheck:frontend
+pnpm test:frontend
+pnpm build:frontend
 ```

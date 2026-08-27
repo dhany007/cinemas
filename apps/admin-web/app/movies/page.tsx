@@ -1,0 +1,2 @@
+import { CrudWorkstation } from "@/components/crud-workstation";
+export default function MoviesPage(){return <CrudWorkstation title="Film" endpoint="/admin/movies" responseKey="movies" fields={[{name:"title",label:"Judul"},{name:"duration_minutes",label:"Durasi (menit)",type:"number"},{name:"rating",label:"Rating",optional:true},{name:"synopsis",label:"Sinopsis",type:"textarea",optional:true},{name:"poster_url",label:"URL poster",optional:true},{name:"release_date",label:"Tanggal rilis",optional:true}]}/>}

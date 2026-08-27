@@ -1,0 +1,3 @@
+node_modules/
+apps/*/.next/
+apps/*/tsconfig.tsbuildinfo

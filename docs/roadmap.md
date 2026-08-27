@@ -106,11 +106,11 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 **Goal:** expose the completed backend journeys through two focused web experiences.
 
-- [ ] Build the customer movie, showtime, seat-selection, checkout, payment-status, order-history, and ticket views.
-- [ ] Build the admin cinema, seat-layout, movie, showtime, and ticket-validation views.
-- [ ] Integrate authenticated API calls without exposing server secrets to the browser.
-- [ ] Add accessible loading, error, empty, and expired-hold states.
-- [ ] Add frontend contract tests for the API journeys already delivered by the backend.
+- [x] Build the customer movie, showtime, seat-selection, checkout, payment-status, order-history, and ticket views.
+- [x] Build the admin cinema, seat-layout, movie, showtime, and ticket-validation views.
+- [x] Integrate authenticated API calls without exposing server secrets to the browser.
+- [x] Add accessible loading, error, empty, and expired-hold states.
+- [x] Add frontend contract tests for the API journeys already delivered by the backend.
 
 **Done when:** each UI is limited to its role, all customer and admin journeys use the protected API, and the interface handles common failures clearly.
 

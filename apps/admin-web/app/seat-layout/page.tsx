@@ -1,0 +1,2 @@
+import { CrudWorkstation } from "@/components/crud-workstation";
+export default function SeatLayoutPage(){return <div className="stack"><CrudWorkstation title="Studio" endpoint="/admin/studios" responseKey="studios" fields={[{name:"cinema_id",label:"ID bioskop"},{name:"name",label:"Nama studio"}]}/><CrudWorkstation title="Layout kursi" endpoint="/admin/seats" responseKey="seats" fields={[{name:"studio_id",label:"ID studio"},{name:"row_label",label:"Baris"},{name:"seat_number",label:"Nomor kursi"},{name:"seat_type",label:"Tipe kursi"}]}/></div>}

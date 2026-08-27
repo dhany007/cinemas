@@ -1,0 +1,12 @@
+{
+  "name": "cinemas-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev:customer": "pnpm --filter customer-web dev",
+    "dev:admin": "pnpm --filter admin-web dev",
+    "build:frontend": "pnpm --filter customer-web build && pnpm --filter admin-web build",
+    "typecheck:frontend": "pnpm --filter customer-web typecheck && pnpm --filter admin-web typecheck",
+    "test:frontend": "node --test tests/frontend-contract.test.mjs"
+  }
+}

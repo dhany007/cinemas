@@ -1,0 +1,2 @@
+import { CrudWorkstation } from "@/components/crud-workstation";
+export default function ShowtimesPage(){return <CrudWorkstation title="Jadwal pertunjukan" endpoint="/admin/showtimes" responseKey="showtimes" fields={[{name:"movie_id",label:"ID film"},{name:"studio_id",label:"ID studio"},{name:"starts_at",label:"Mulai",type:"date-time"},{name:"ends_at",label:"Selesai",type:"date-time"},{name:"base_price",label:"Harga dasar"},{name:"currency",label:"Mata uang (mis. IDR)"}]}/>}
