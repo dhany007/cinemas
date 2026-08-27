@@ -42,13 +42,15 @@ Both apps call their own `/api/backend/*` route handler from the browser. That s
 
 ## Run with Docker Compose
 
-For local development, Docker Compose starts PostgreSQL, applies pending SQL migrations exactly once, then starts the API:
+For local development, `make up` builds and starts PostgreSQL, applies pending SQL migrations exactly once, then starts the API and both web applications in the background:
 
 ```text
-docker compose up --build
+make up
 ```
 
-The API is available at `http://127.0.0.1:18081/healthz` and PostgreSQL is available only on `127.0.0.1:54329` by default. Override those host ports with `CINEMAS_API_PORT` and `CINEMAS_POSTGRES_PORT`.
+Use `make ps` to inspect service status, `make logs` to follow logs, and `make down` to stop the stack while preserving the local PostgreSQL volume.
+
+The API is available at `http://127.0.0.1:18081/healthz`, the customer web app at `http://127.0.0.1:13000`, and the admin web app at `http://127.0.0.1:13001`. PostgreSQL is available only on `127.0.0.1:54329` by default. Override those host ports with `CINEMAS_API_PORT`, `CINEMAS_CUSTOMER_WEB_PORT`, `CINEMAS_ADMIN_WEB_PORT`, and `CINEMAS_POSTGRES_PORT`.
 
 The Compose database credentials and authentication secrets are local-development values only. Never reuse them in staging or production. To stop the stack while preserving local data, run `docker compose down`. `docker compose down -v` also deletes the local database volume.
 

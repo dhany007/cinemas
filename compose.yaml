@@ -31,6 +31,7 @@ services:
   api:
     build:
       context: .
+      target: api
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -46,6 +47,35 @@ services:
       PAYMENT_WEBHOOK_REPLAY_WINDOW: 5m
     ports:
       - "127.0.0.1:${CINEMAS_API_PORT:-18081}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  customer-web:
+    build:
+      context: .
+      target: customer-web
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8080
+    ports:
+      - "127.0.0.1:${CINEMAS_CUSTOMER_WEB_PORT:-13000}:3000"
+
+  admin-web:
+    build:
+      context: .
+      target: admin-web
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8080
+    ports:
+      - "127.0.0.1:${CINEMAS_ADMIN_WEB_PORT:-13001}:3000"
 
 volumes:
   cinemas_postgres_data:
