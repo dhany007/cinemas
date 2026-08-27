@@ -61,3 +61,48 @@ func TestServiceRetriesTicketDeliveryAndReconcilesLeaseExpiry(t *testing.T) {
 		t.Fatalf("reconciliation DeliverPending() = %d, %v; want abandoned lease completed", processed, err)
 	}
 }
+
+func TestServiceChecksInTicketOnceAndPreservesFirstCheckIn(t *testing.T) {
+	now := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	repository := NewMemoryRepository([]Ticket{{
+		ID: "ticket-1", OrderID: "order-1", UserID: "owner-1", Code: "TKT-opaque", QRToken: "TKT-opaque", Status: TicketIssued,
+	}})
+	service := NewService(repository, nil, func() time.Time { return now }, time.Minute)
+
+	checkedIn, err := service.CheckInTicket(context.Background(), "TKT-opaque", "admin-1")
+	if err != nil || checkedIn.Status != TicketUsed || checkedIn.CheckedInAt == nil {
+		t.Fatalf("CheckInTicket() ticket=%#v error=%v", checkedIn, err)
+	}
+	firstCheckedInAt := *checkedIn.CheckedInAt
+	now = now.Add(time.Minute)
+	_, err = service.CheckInTicket(context.Background(), "TKT-opaque", "admin-2")
+	if !errors.Is(err, ErrTicketAlreadyUsed) {
+		t.Fatalf("repeated CheckInTicket() error = %v, want ErrTicketAlreadyUsed", err)
+	}
+	stored, err := service.LookupAdminTicket(context.Background(), "TKT-opaque")
+	if err != nil || stored.CheckedInAt == nil || !stored.CheckedInAt.Equal(firstCheckedInAt) {
+		t.Fatalf("ticket after repeated scan = %#v error=%v, want original check-in timestamp", stored, err)
+	}
+}
+
+func TestServiceListsOperationalExceptions(t *testing.T) {
+	now := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	repository := NewMemoryRepository(nil)
+	repository.AddExpiringHold(ExpiringHold{OrderID: "order-hold", ExpiresAt: now.Add(5 * time.Minute), SeatCount: 2})
+	repository.AddPaymentException(PaymentException{OrderID: "order-refund", Status: "REFUND_PENDING"})
+	repository.AddNotificationFailure(NotificationFailure{EventID: 1, OrderID: "order-delivery", Attempts: 2, Status: DeliveryPending})
+	service := NewService(repository, nil, func() time.Time { return now }, time.Minute)
+
+	holds, err := service.ListExpiringHolds(context.Background(), 10)
+	if err != nil || len(holds) != 1 || holds[0].OrderID != "order-hold" {
+		t.Fatalf("ListExpiringHolds() holds=%#v error=%v", holds, err)
+	}
+	exceptions, err := service.ListPaymentExceptions(context.Background(), 10)
+	if err != nil || len(exceptions) != 1 || exceptions[0].Status != "REFUND_PENDING" {
+		t.Fatalf("ListPaymentExceptions() exceptions=%#v error=%v", exceptions, err)
+	}
+	failures, err := service.ListNotificationFailures(context.Background(), 10)
+	if err != nil || len(failures) != 1 || failures[0].Attempts != 2 {
+		t.Fatalf("ListNotificationFailures() failures=%#v error=%v", failures, err)
+	}
+}

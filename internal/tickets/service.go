@@ -67,3 +67,76 @@ func (s *Service) DeliverPending(ctx context.Context, limit int) (int, error) {
 	}
 	return completed, nil
 }
+
+func (s *Service) LookupAdminTicket(ctx context.Context, qrToken string) (AdminTicket, error) {
+	if err := ctx.Err(); err != nil {
+		return AdminTicket{}, err
+	}
+	if strings.TrimSpace(qrToken) == "" {
+		return AdminTicket{}, ErrTicketNotFound
+	}
+	ticket, err := s.repository.LookupAdminTicket(ctx, qrToken)
+	if err != nil {
+		return AdminTicket{}, fmt.Errorf("lookup admin ticket: %w", err)
+	}
+	return ticket, nil
+}
+
+func (s *Service) CheckInTicket(ctx context.Context, qrToken, adminUserID string) (AdminTicket, error) {
+	if err := ctx.Err(); err != nil {
+		return AdminTicket{}, err
+	}
+	if strings.TrimSpace(qrToken) == "" {
+		return AdminTicket{}, ErrTicketNotFound
+	}
+	if strings.TrimSpace(adminUserID) == "" {
+		return AdminTicket{}, ErrTicketNotFound
+	}
+	ticket, err := s.repository.CheckInTicket(ctx, qrToken, adminUserID, s.clock().UTC())
+	if err != nil {
+		return AdminTicket{}, fmt.Errorf("check in ticket: %w", err)
+	}
+	return ticket, nil
+}
+
+func (s *Service) ListExpiringHolds(ctx context.Context, limit int) ([]ExpiringHold, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 {
+		return []ExpiringHold{}, nil
+	}
+	holds, err := s.repository.ListExpiringHolds(ctx, s.clock().UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list expiring holds: %w", err)
+	}
+	return holds, nil
+}
+
+func (s *Service) ListPaymentExceptions(ctx context.Context, limit int) ([]PaymentException, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 {
+		return []PaymentException{}, nil
+	}
+	exceptions, err := s.repository.ListPaymentExceptions(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list payment exceptions: %w", err)
+	}
+	return exceptions, nil
+}
+
+func (s *Service) ListNotificationFailures(ctx context.Context, limit int) ([]NotificationFailure, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 {
+		return []NotificationFailure{}, nil
+	}
+	failures, err := s.repository.ListNotificationFailures(ctx, s.clock().UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list notification failures: %w", err)
+	}
+	return failures, nil
+}

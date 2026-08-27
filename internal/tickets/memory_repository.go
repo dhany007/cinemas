@@ -15,10 +15,13 @@ type memoryDeliveryEvent struct {
 
 // MemoryRepository supports deterministic service tests.
 type MemoryRepository struct {
-	mu        sync.Mutex
-	tickets   []Ticket
-	events    map[int64]memoryDeliveryEvent
-	nextEvent int64
+	mu                   sync.Mutex
+	tickets              []Ticket
+	events               map[int64]memoryDeliveryEvent
+	nextEvent            int64
+	expiringHolds        []ExpiringHold
+	paymentExceptions    []PaymentException
+	notificationFailures []NotificationFailure
 }
 
 func NewMemoryRepository(tickets []Ticket) *MemoryRepository {
@@ -118,6 +121,86 @@ func (r *MemoryRepository) DeliveryState(orderID string) DeliveryStatus {
 		}
 	}
 	return ""
+}
+
+func (r *MemoryRepository) LookupAdminTicket(_ context.Context, qrToken string) (AdminTicket, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ticket := range r.tickets {
+		if ticket.QRToken == qrToken {
+			return toAdminTicket(ticket), nil
+		}
+	}
+	return AdminTicket{}, ErrTicketNotFound
+}
+
+func (r *MemoryRepository) CheckInTicket(_ context.Context, qrToken, _ string, now time.Time) (AdminTicket, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index, ticket := range r.tickets {
+		if ticket.QRToken != qrToken {
+			continue
+		}
+		if ticket.Status == TicketUsed {
+			return AdminTicket{}, ErrTicketAlreadyUsed
+		}
+		if ticket.Status != TicketIssued {
+			return AdminTicket{}, ErrTicketNotFound
+		}
+		ticket.Status = TicketUsed
+		checkedInAt := now
+		ticket.CheckedInAt = &checkedInAt
+		r.tickets[index] = ticket
+		return toAdminTicket(ticket), nil
+	}
+	return AdminTicket{}, ErrTicketNotFound
+}
+
+func (r *MemoryRepository) ListExpiringHolds(_ context.Context, _ time.Time, limit int) ([]ExpiringHold, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ExpiringHold(nil), r.expiringHolds[:min(limit, len(r.expiringHolds))]...), nil
+}
+
+func (r *MemoryRepository) ListPaymentExceptions(_ context.Context, limit int) ([]PaymentException, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]PaymentException(nil), r.paymentExceptions[:min(limit, len(r.paymentExceptions))]...), nil
+}
+
+func (r *MemoryRepository) ListNotificationFailures(_ context.Context, _ time.Time, limit int) ([]NotificationFailure, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]NotificationFailure(nil), r.notificationFailures[:min(limit, len(r.notificationFailures))]...), nil
+}
+
+func (r *MemoryRepository) AddExpiringHold(hold ExpiringHold) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.expiringHolds = append(r.expiringHolds, hold)
+}
+
+func (r *MemoryRepository) AddPaymentException(exception PaymentException) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.paymentExceptions = append(r.paymentExceptions, exception)
+}
+
+func (r *MemoryRepository) AddNotificationFailure(failure NotificationFailure) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notificationFailures = append(r.notificationFailures, failure)
+}
+
+func toAdminTicket(ticket Ticket) AdminTicket {
+	return AdminTicket{ID: ticket.ID, Status: ticket.Status, CustomerDisplayName: "Customer", CheckedInAt: ticket.CheckedInAt}
+}
+
+func min(first, second int) int {
+	if first < second {
+		return first
+	}
+	return second
 }
 
 // MemoryNotifier is a deterministic notifier for tests and local wiring.

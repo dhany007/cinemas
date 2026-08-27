@@ -94,11 +94,11 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 **Goal:** let administrators operate the cinema safely on show day.
 
-- [ ] Add admin-only ticket lookup with minimal customer data.
-- [ ] Add admin-only atomic ticket check-in (`ISSUED` to `USED`).
-- [ ] Return a conflict for repeated QR scans without changing the first check-in record.
-- [ ] Add operational views/APIs for expiring holds, payment exceptions, and notification failures.
-- [ ] Add audit events for check-in and privileged operational actions.
+- [x] Add admin-only ticket lookup with minimal customer data.
+- [x] Add admin-only atomic ticket check-in (`ISSUED` to `USED`).
+- [x] Return a conflict for repeated QR scans without changing the first check-in record.
+- [x] Add operational views/APIs for expiring holds, payment exceptions, and notification failures.
+- [x] Add audit events for check-in and privileged operational actions.
 
 **Done when:** concurrent scans can consume a ticket only once, administrators can resolve exceptions, and all privileged actions are auditable.
 

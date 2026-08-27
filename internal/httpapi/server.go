@@ -193,6 +193,11 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 // EnableTicketRoutes exposes customer-owned paid ticket retrieval.
 func (s *Server) EnableTicketRoutes(authenticationService *auth.Service, service *tickets.Service) {
 	s.e.GET("/v1/orders/:orderID/tickets", s.requireRole(authenticationService, auth.RoleCustomer, s.listOrderTickets(service)))
+	s.e.GET("/v1/admin/tickets/:qrToken", s.requireRole(authenticationService, auth.RoleAdmin, s.lookupAdminTicket(service)))
+	s.e.POST("/v1/admin/tickets/:qrToken/check-in", s.requireRole(authenticationService, auth.RoleAdmin, s.checkInTicket(service)))
+	s.e.GET("/v1/admin/operations/expiring-holds", s.requireRole(authenticationService, auth.RoleAdmin, s.listExpiringHolds(service)))
+	s.e.GET("/v1/admin/operations/payment-exceptions", s.requireRole(authenticationService, auth.RoleAdmin, s.listPaymentExceptions(service)))
+	s.e.GET("/v1/admin/operations/notification-failures", s.requireRole(authenticationService, auth.RoleAdmin, s.listNotificationFailures(service)))
 }
 
 type createOrderRequest struct {
@@ -253,6 +258,51 @@ type ticketResponse struct {
 	Code    string `json:"ticket_code"`
 	QRToken string `json:"qr_token"`
 	Status  string `json:"status"`
+}
+
+type adminTicketResponse struct {
+	ID                  string `json:"id"`
+	Status              string `json:"status"`
+	CustomerDisplayName string `json:"customer_display_name"`
+	MovieTitle          string `json:"movie_title"`
+	CinemaName          string `json:"cinema_name"`
+	StudioName          string `json:"studio_name"`
+	StartsAt            string `json:"starts_at"`
+	CheckedInAt         string `json:"checked_in_at,omitempty"`
+}
+
+type expiringHoldsResponse struct {
+	Orders []expiringHoldResponse `json:"orders"`
+}
+
+type expiringHoldResponse struct {
+	OrderID   string `json:"order_id"`
+	ExpiresAt string `json:"expires_at"`
+	SeatCount int    `json:"seat_count"`
+}
+
+type paymentExceptionsResponse struct {
+	Payments []paymentExceptionResponse `json:"payments"`
+}
+
+type paymentExceptionResponse struct {
+	OrderID   string `json:"order_id"`
+	Provider  string `json:"provider"`
+	Reference string `json:"reference"`
+	Status    string `json:"status"`
+	PaidAt    string `json:"paid_at,omitempty"`
+}
+
+type notificationFailuresResponse struct {
+	Events []notificationFailureResponse `json:"events"`
+}
+
+type notificationFailureResponse struct {
+	EventID     int64  `json:"event_id"`
+	OrderID     string `json:"order_id"`
+	Attempts    int    `json:"attempts"`
+	Status      string `json:"status"`
+	AvailableAt string `json:"available_at"`
 }
 
 type errorResponse struct {
@@ -515,6 +565,95 @@ func (s *Server) listOrderTickets(service *tickets.Service) echo.HandlerFunc {
 			response.Tickets[i] = ticketResponse{ID: ticket.ID, Code: ticket.Code, QRToken: ticket.QRToken, Status: string(ticket.Status)}
 		}
 		return c.JSON(http.StatusOK, response)
+	}
+}
+
+func (s *Server) lookupAdminTicket(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ticket, err := service.LookupAdminTicket(c.Request().Context(), c.Param("qrToken"))
+		if err != nil {
+			return writeTicketOperationError(c, err)
+		}
+		return c.JSON(http.StatusOK, toAdminTicketResponse(ticket))
+	}
+}
+
+func (s *Server) checkInTicket(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		ticket, err := service.CheckInTicket(c.Request().Context(), c.Param("qrToken"), identity.UserID)
+		if err != nil {
+			return writeTicketOperationError(c, err)
+		}
+		return c.JSON(http.StatusOK, toAdminTicketResponse(ticket))
+	}
+}
+
+func (s *Server) listExpiringHolds(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		holds, err := service.ListExpiringHolds(c.Request().Context(), 100)
+		if err != nil {
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to list expiring holds")
+		}
+		response := expiringHoldsResponse{Orders: make([]expiringHoldResponse, len(holds))}
+		for i, hold := range holds {
+			response.Orders[i] = expiringHoldResponse{OrderID: hold.OrderID, ExpiresAt: hold.ExpiresAt.Format(time.RFC3339), SeatCount: hold.SeatCount}
+		}
+		return c.JSON(http.StatusOK, response)
+	}
+}
+
+func (s *Server) listPaymentExceptions(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		exceptions, err := service.ListPaymentExceptions(c.Request().Context(), 100)
+		if err != nil {
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to list payment exceptions")
+		}
+		response := paymentExceptionsResponse{Payments: make([]paymentExceptionResponse, len(exceptions))}
+		for i, exception := range exceptions {
+			item := paymentExceptionResponse{OrderID: exception.OrderID, Provider: exception.Provider, Reference: exception.Reference, Status: exception.Status}
+			if exception.PaidAt != nil {
+				item.PaidAt = exception.PaidAt.Format(time.RFC3339)
+			}
+			response.Payments[i] = item
+		}
+		return c.JSON(http.StatusOK, response)
+	}
+}
+
+func (s *Server) listNotificationFailures(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		failures, err := service.ListNotificationFailures(c.Request().Context(), 100)
+		if err != nil {
+			return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to list notification failures")
+		}
+		response := notificationFailuresResponse{Events: make([]notificationFailureResponse, len(failures))}
+		for i, failure := range failures {
+			response.Events[i] = notificationFailureResponse{EventID: failure.EventID, OrderID: failure.OrderID, Attempts: failure.Attempts, Status: string(failure.Status), AvailableAt: failure.AvailableAt.Format(time.RFC3339)}
+		}
+		return c.JSON(http.StatusOK, response)
+	}
+}
+
+func toAdminTicketResponse(ticket tickets.AdminTicket) adminTicketResponse {
+	response := adminTicketResponse{ID: ticket.ID, Status: string(ticket.Status), CustomerDisplayName: ticket.CustomerDisplayName, MovieTitle: ticket.MovieTitle, CinemaName: ticket.CinemaName, StudioName: ticket.StudioName, StartsAt: ticket.StartsAt.Format(time.RFC3339)}
+	if ticket.CheckedInAt != nil {
+		response.CheckedInAt = ticket.CheckedInAt.Format(time.RFC3339)
+	}
+	return response
+}
+
+func writeTicketOperationError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, tickets.ErrTicketNotFound):
+		return writeError(c, http.StatusNotFound, "TICKET_NOT_FOUND", "ticket was not found")
+	case errors.Is(err, tickets.ErrTicketAlreadyUsed):
+		return writeError(c, http.StatusConflict, "TICKET_ALREADY_USED", "ticket has already been checked in")
+	default:
+		return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to operate ticket")
 	}
 }
 

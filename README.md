@@ -61,6 +61,8 @@ The versioned API contract is [openapi/openapi.yaml](openapi/openapi.yaml). Upda
 
 `GET /v1/orders/{orderId}/tickets` requires the owner's bearer token and returns tickets only after the order is paid. Each ticket includes an opaque QR token but never the stored token hash. Payment finalization writes one `TICKET_DELIVERY_REQUESTED` outbox event in the same transaction; the local worker delivers it through a logging adapter and retries failures without logging addresses, ticket codes, QR tokens, or hashes.
 
+Administrators can use `GET /v1/admin/tickets/{qrToken}` for a minimal ticket lookup and `POST /v1/admin/tickets/{qrToken}/check-in` to atomically consume an `ISSUED` ticket. A repeated scan returns `409 TICKET_ALREADY_USED` without changing the original check-in. The admin operational endpoints list holds expiring within fifteen minutes, late payments awaiting refund/manual review, and retrying or stale ticket-delivery events.
+
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires `Authorization: Bearer <access_token>`, an `Idempotency-Key` header, and a JSON body:
 
 ```json

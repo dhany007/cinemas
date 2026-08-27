@@ -1384,3 +1384,49 @@ func TestServerReturnsTicketsOnlyToTheirOwner(t *testing.T) {
 		t.Fatalf("foreign response status = %d, want %d", otherRequest.Code, http.StatusNotFound)
 	}
 }
+
+func TestServerAllowsOnlyAdminTicketLookupAndSingleCheckIn(t *testing.T) {
+	now := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, func() time.Time { return now })
+	authenticationService := auth.NewService(auth.NewMemoryRepository(), []byte("01234567890123456789012345678901"), time.Hour, func() time.Time { return now })
+	admin, err := authenticationService.RegisterAdmin(context.Background(), auth.RegisterInput{Email: "ticket-admin@example.com", Password: "correct horse battery staple", DisplayName: "Admin"})
+	if err != nil {
+		t.Fatalf("register admin: %v", err)
+	}
+	customer, err := authenticationService.Register(context.Background(), auth.RegisterInput{Email: "ticket-customer@example.com", Password: "correct horse battery staple", DisplayName: "Customer"})
+	if err != nil {
+		t.Fatalf("register customer: %v", err)
+	}
+	ticketService := tickets.NewService(tickets.NewMemoryRepository([]tickets.Ticket{{
+		ID: "ticket-1", OrderID: "order-1", UserID: customer.User.ID, Code: "TKT-opaque", QRToken: "TKT-opaque", Status: tickets.TicketIssued,
+	}}), nil, func() time.Time { return now }, time.Minute)
+	server := NewServerWithAllFeatures(bookingService, nil, nil, nil, nil, authenticationService, "bootstrap-token")
+	server.EnableTicketRoutes(authenticationService, ticketService)
+
+	lookup := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/tickets/TKT-opaque", "", admin.AccessToken)
+	if lookup.Code != http.StatusOK || bytes.Contains(lookup.Body.Bytes(), []byte("qr_token")) || bytes.Contains(lookup.Body.Bytes(), []byte("email")) {
+		t.Fatalf("admin lookup status/body = %d/%s", lookup.Code, lookup.Body.String())
+	}
+	checkIn := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/tickets/TKT-opaque/check-in", "", admin.AccessToken)
+	if checkIn.Code != http.StatusOK || !bytes.Contains(checkIn.Body.Bytes(), []byte(`"status":"USED"`)) {
+		t.Fatalf("check-in status/body = %d/%s", checkIn.Code, checkIn.Body.String())
+	}
+	repeated := serveAdminCinemaRequest(server, http.MethodPost, "/v1/admin/tickets/TKT-opaque/check-in", "", admin.AccessToken)
+	if repeated.Code != http.StatusConflict || !bytes.Contains(repeated.Body.Bytes(), []byte(`"code":"TICKET_ALREADY_USED"`)) {
+		t.Fatalf("repeated check-in status/body = %d/%s", repeated.Code, repeated.Body.String())
+	}
+	forbidden := serveAdminCinemaRequest(server, http.MethodGet, "/v1/admin/tickets/TKT-opaque", "", customer.AccessToken)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("customer admin lookup status = %d, want %d", forbidden.Code, http.StatusForbidden)
+	}
+	for _, path := range []string{
+		"/v1/admin/operations/expiring-holds",
+		"/v1/admin/operations/payment-exceptions",
+		"/v1/admin/operations/notification-failures",
+	} {
+		response := serveAdminCinemaRequest(server, http.MethodGet, path, "", admin.AccessToken)
+		if response.Code != http.StatusOK {
+			t.Fatalf("admin operations %s status/body = %d/%s", path, response.Code, response.Body.String())
+		}
+	}
+}

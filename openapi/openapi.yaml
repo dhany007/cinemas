@@ -416,6 +416,68 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/OrderNotFound'}
+  /v1/admin/tickets/{qrToken}:
+    get:
+      summary: Look up a ticket for an administrator
+      description: Returns only the ticket, showtime, and customer display name; it never returns QR tokens, hashes, or customer email.
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: qrToken
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Minimal ticket operations data
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTicket'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Ticket not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/admin/tickets/{qrToken}/check-in:
+    post:
+      summary: Atomically check in an issued ticket
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: qrToken
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ticket checked in
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminTicket'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Ticket not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Ticket already used, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/admin/operations/expiring-holds:
+    get:
+      summary: List orders with holds expiring in the next fifteen minutes
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Expiring holds, content: {application/json: {schema: {$ref: '#/components/schemas/ExpiringHolds'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/admin/operations/payment-exceptions:
+    get:
+      summary: List late payments awaiting refund or manual review
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Payment exceptions, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentExceptions'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/admin/operations/notification-failures:
+    get:
+      summary: List retrying or lease-expired ticket delivery events
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Notification failures, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationFailures'}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /v1/webhooks/payments/{provider}:
     post:
       summary: Process a signed payment-provider webhook
@@ -714,3 +776,58 @@ components:
         ticket_code: {type: string}
         qr_token: {type: string, description: Opaque token for QR rendering; its database hash is never returned.}
         status: {type: string, enum: [ISSUED, USED, VOID]}
+    AdminTicket:
+      type: object
+      required: [id, status, customer_display_name, movie_title, cinema_name, studio_name, starts_at]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        status: {type: string, enum: [ISSUED, USED, VOID]}
+        customer_display_name: {type: string}
+        movie_title: {type: string}
+        cinema_name: {type: string}
+        studio_name: {type: string}
+        starts_at: {type: string, format: date-time}
+        checked_in_at: {type: string, format: date-time}
+    ExpiringHolds:
+      type: object
+      required: [orders]
+      properties:
+        orders:
+          type: array
+          items:
+            type: object
+            required: [order_id, expires_at, seat_count]
+            properties:
+              order_id: {$ref: '#/components/schemas/UUID'}
+              expires_at: {type: string, format: date-time}
+              seat_count: {type: integer}
+    PaymentExceptions:
+      type: object
+      required: [payments]
+      properties:
+        payments:
+          type: array
+          items:
+            type: object
+            required: [order_id, provider, reference, status]
+            properties:
+              order_id: {$ref: '#/components/schemas/UUID'}
+              provider: {type: string}
+              reference: {type: string}
+              status: {type: string, enum: [REFUND_PENDING]}
+              paid_at: {type: string, format: date-time}
+    NotificationFailures:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            type: object
+            required: [event_id, order_id, attempts, status, available_at]
+            properties:
+              event_id: {type: integer}
+              order_id: {$ref: '#/components/schemas/UUID'}
+              attempts: {type: integer}
+              status: {type: string, enum: [PENDING, PROCESSING]}
+              available_at: {type: string, format: date-time}
