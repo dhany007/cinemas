@@ -8,6 +8,10 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cinemas-api ./cmd/api
 
+FROM api-build AS seed-build
+
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cinemas-seed ./cmd/seed
+
 FROM alpine:3.22 AS api
 
 RUN addgroup -S cinemas && adduser -S cinemas -G cinemas
@@ -17,6 +21,15 @@ COPY --from=api-build /out/cinemas-api /cinemas-api
 
 EXPOSE 8080
 ENTRYPOINT ["/cinemas-api"]
+
+FROM alpine:3.22 AS seed
+
+RUN apk add --no-cache ca-certificates && addgroup -S cinemas && adduser -S cinemas -G cinemas
+USER cinemas
+
+COPY --from=seed-build /out/cinemas-seed /cinemas-seed
+
+ENTRYPOINT ["/cinemas-seed"]
 
 FROM node:24-alpine AS web-dependencies
 

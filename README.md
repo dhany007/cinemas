@@ -50,6 +50,18 @@ make up
 
 Use `make ps` to inspect service status, `make logs` to follow logs, and `make down` to stop the stack while preserving the local PostgreSQL volume.
 
+## Seed local catalog data
+
+`make seed` creates two local cinemas, three studios, and three movies through the protected administrator API. It is idempotent, so rerunning it creates only missing records. Movie metadata is retrieved from [OMDb](https://www.omdbapi.com/); create a personal development API key, then keep it only in your untracked `.env` file:
+
+```text
+cp .env.example .env
+# Set OMDB_API_KEY in .env
+make seed
+```
+
+The seed command bootstraps `admin@cinemas.local` only when no admin exists, then logs in with `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD`. If your database already has an admin, configure those variables in `.env` to match that account. It does not print the OMDb key, password, or access token.
+
 The API is available at `http://127.0.0.1:18081/healthz`, the customer web app at `http://127.0.0.1:13000`, and the admin web app at `http://127.0.0.1:13001`. PostgreSQL is available only on `127.0.0.1:54329` by default. Override those host ports with `CINEMAS_API_PORT`, `CINEMAS_CUSTOMER_WEB_PORT`, `CINEMAS_ADMIN_WEB_PORT`, and `CINEMAS_POSTGRES_PORT`.
 
 The Compose database credentials and authentication secrets are local-development values only. Never reuse them in staging or production. To stop the stack while preserving local data, run `docker compose down`. `docker compose down -v` also deletes the local database volume.

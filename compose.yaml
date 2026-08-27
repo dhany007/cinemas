@@ -40,7 +40,7 @@ services:
       DATABASE_URL: postgresql://cinemas:cinemas@postgres:5432/cinemas?sslmode=disable
       AUTH_JWT_SECRET: local-development-jwt-secret-change-me
       AUTH_ACCESS_TOKEN_TTL: 1h
-      AUTH_ADMIN_BOOTSTRAP_TOKEN: local-admin-bootstrap-token
+      AUTH_ADMIN_BOOTSTRAP_TOKEN: ${AUTH_ADMIN_BOOTSTRAP_TOKEN:-local-admin-bootstrap-token}
       APP_ENV: development
       PAYMENT_PROVIDER: FAKE
       PAYMENT_WEBHOOK_SECRET: local-payment-webhook-secret-change-me
@@ -76,6 +76,23 @@ services:
       API_BASE_URL: http://api:8080
     ports:
       - "127.0.0.1:${CINEMAS_ADMIN_WEB_PORT:-13001}:3000"
+
+  seed:
+    build:
+      context: .
+      target: seed
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8080
+      AUTH_ADMIN_BOOTSTRAP_TOKEN: ${AUTH_ADMIN_BOOTSTRAP_TOKEN:-local-admin-bootstrap-token}
+      OMDB_API_KEY: ${OMDB_API_KEY:-}
+      OMDB_API_BASE_URL: ${OMDB_API_BASE_URL:-https://www.omdbapi.com/}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@cinemas.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-local-admin-password-change-me}
+      SEED_ADMIN_DISPLAY_NAME: ${SEED_ADMIN_DISPLAY_NAME:-Local Administrator}
+    profiles: ["tools"]
 
 volumes:
   cinemas_postgres_data:
