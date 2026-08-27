@@ -401,6 +401,21 @@ paths:
         '404': {$ref: '#/components/responses/OrderNotFound'}
         '409': {$ref: '#/components/responses/OrderNotPayable'}
         '429': {$ref: '#/components/responses/RateLimited'}
+  /v1/orders/{orderID}/tickets:
+    get:
+      summary: List the authenticated customer's paid-order tickets
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/OrderID'}]
+      responses:
+        '200':
+          description: Paid-order tickets, including opaque QR tokens but never token hashes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TicketList'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/OrderNotFound'}
   /v1/webhooks/payments/{provider}:
     post:
       summary: Process a signed payment-provider webhook
@@ -684,3 +699,18 @@ components:
         status: {type: string, enum: [PENDING, SUCCEEDED, FAILED, EXPIRED, REFUND_PENDING]}
         amount: {type: string}
         currency: {type: string}
+    TicketList:
+      type: object
+      required: [tickets]
+      properties:
+        tickets:
+          type: array
+          items: {$ref: '#/components/schemas/Ticket'}
+    Ticket:
+      type: object
+      required: [id, ticket_code, qr_token, status]
+      properties:
+        id: {$ref: '#/components/schemas/UUID'}
+        ticket_code: {type: string}
+        qr_token: {type: string, description: Opaque token for QR rendering; its database hash is never returned.}
+        status: {type: string, enum: [ISSUED, USED, VOID]}

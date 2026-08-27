@@ -16,6 +16,7 @@ import (
 	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
+	"github.com/citradigital/cinemas/internal/tickets"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -189,6 +190,11 @@ func (s *Server) EnableAdminCinemaRoutes(authenticationService *auth.Service, se
 	)
 }
 
+// EnableTicketRoutes exposes customer-owned paid ticket retrieval.
+func (s *Server) EnableTicketRoutes(authenticationService *auth.Service, service *tickets.Service) {
+	s.e.GET("/v1/orders/:orderID/tickets", s.requireRole(authenticationService, auth.RoleCustomer, s.listOrderTickets(service)))
+}
+
 type createOrderRequest struct {
 	ShowtimeID string   `json:"showtime_id"`
 	SeatIDs    []string `json:"seat_ids"`
@@ -236,6 +242,17 @@ type orderPaymentResponse struct {
 	Amount    string `json:"amount"`
 	Currency  string `json:"currency"`
 	PaidAt    string `json:"paid_at,omitempty"`
+}
+
+type ticketListResponse struct {
+	Tickets []ticketResponse `json:"tickets"`
+}
+
+type ticketResponse struct {
+	ID      string `json:"id"`
+	Code    string `json:"ticket_code"`
+	QRToken string `json:"qr_token"`
+	Status  string `json:"status"`
 }
 
 type errorResponse struct {
@@ -471,6 +488,33 @@ func (s *Server) listOrders(service *booking.Service) echo.HandlerFunc {
 			response[i] = toOrderDetailResponse(order)
 		}
 		return c.JSON(http.StatusOK, orderListResponse{Orders: response})
+	}
+}
+
+func (s *Server) listOrderTickets(service *tickets.Service) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		identity, ok := authenticatedIdentity(c)
+		if !ok {
+			return writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "access token is required")
+		}
+		orderID := c.Param("orderID")
+		if !isUUID(orderID) {
+			return writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "order ID must be a UUID")
+		}
+		items, err := service.ListOrderTickets(c.Request().Context(), orderID, identity.UserID)
+		if err != nil {
+			switch {
+			case errors.Is(err, tickets.ErrOrderNotFound):
+				return writeError(c, http.StatusNotFound, "ORDER_NOT_FOUND", "order was not found")
+			default:
+				return writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "unable to retrieve tickets")
+			}
+		}
+		response := ticketListResponse{Tickets: make([]ticketResponse, len(items))}
+		for i, ticket := range items {
+			response.Tickets[i] = ticketResponse{ID: ticket.ID, Code: ticket.Code, QRToken: ticket.QRToken, Status: string(ticket.Status)}
+		}
+		return c.JSON(http.StatusOK, response)
 	}
 }
 

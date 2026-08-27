@@ -258,11 +258,19 @@ WHERE hold_order_id = $1 AND status = 'HELD'`, orderID); err != nil {
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO tickets (order_id, order_item_id, ticket_code, qr_token_hash)
-SELECT order_id, id, 'TKT-' || REPLACE(id::text, '-', ''), ENCODE(DIGEST(id::text, 'sha256'), 'hex')
-FROM order_items
-WHERE order_id = $1
+SELECT generated.order_id, generated.id, generated.ticket_code, ENCODE(DIGEST(generated.ticket_code, 'sha256'), 'hex')
+FROM (
+    SELECT order_id, id, 'TKT-' || ENCODE(GEN_RANDOM_BYTES(32), 'hex') AS ticket_code
+    FROM order_items
+    WHERE order_id = $1
+) AS generated
 ON CONFLICT (order_item_id) DO NOTHING`, orderID); err != nil {
 		return fmt.Errorf("issue tickets: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+VALUES ('ORDER', $1, 'TICKET_DELIVERY_REQUESTED', JSONB_BUILD_OBJECT('order_id', $1::uuid))`, orderID); err != nil {
+		return fmt.Errorf("enqueue ticket delivery: %w", err)
 	}
 	return recordPaymentAuditEvent(ctx, tx, orderID, "PAYMENT_SUCCEEDED")
 }

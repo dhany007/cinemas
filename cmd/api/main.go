@@ -19,6 +19,7 @@ import (
 	"github.com/citradigital/cinemas/internal/postgres"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
+	"github.com/citradigital/cinemas/internal/tickets"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,6 +34,9 @@ const (
 	holdExpiryInterval         = 30 * time.Second
 	holdExpiryBatchSize        = 100
 	defaultWebhookReplayWindow = 5 * time.Minute
+	ticketDeliveryInterval     = 30 * time.Second
+	ticketDeliveryBatchSize    = 100
+	ticketDeliveryRetryDelay   = time.Minute
 )
 
 type authenticationConfig struct {
@@ -93,6 +97,15 @@ func main() {
 		payments.NewFakeProvider(paymentConfig.webhookSecret, paymentConfig.replayWindow),
 		time.Now,
 	)
+	ticketService := tickets.NewService(
+		postgres.NewTicketsRepository(pool),
+		tickets.NewLoggingNotifier(logger),
+		time.Now,
+		ticketDeliveryRetryDelay,
+	)
+	ticketDeliveryContext, cancelTicketDelivery := context.WithCancel(context.Background())
+	defer cancelTicketDelivery()
+	go runTicketDeliveryWorker(ticketDeliveryContext, logger, ticketService)
 	authenticationService := auth.NewService(
 		postgres.NewAuthRepository(pool),
 		authenticationConfig.jwtSecret,
@@ -109,6 +122,7 @@ func main() {
 		authenticationConfig.adminBootstrapToken,
 	)
 	api.EnableAdminCinemaRoutes(authenticationService, admin.NewService(postgres.NewAdminRepository(pool)))
+	api.EnableTicketRoutes(authenticationService, ticketService)
 	server := &http.Server{
 		Addr:              environmentOr("ADDR", ":8080"),
 		Handler:           api,
@@ -159,6 +173,26 @@ func runHoldExpiryWorker(ctx context.Context, logger *slog.Logger, service *book
 			}
 			if expired > 0 {
 				logger.Info("expired pending holds", "count", expired)
+			}
+		}
+	}
+}
+
+func runTicketDeliveryWorker(ctx context.Context, logger *slog.Logger, service *tickets.Service) {
+	ticker := time.NewTicker(ticketDeliveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			delivered, err := service.DeliverPending(ctx, ticketDeliveryBatchSize)
+			if err != nil {
+				logger.Error("deliver tickets", "error", err)
+				continue
+			}
+			if delivered > 0 {
+				logger.Info("delivered tickets", "count", delivered)
 			}
 		}
 	}

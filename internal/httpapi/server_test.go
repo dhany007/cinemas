@@ -18,6 +18,7 @@ import (
 	"github.com/citradigital/cinemas/internal/payments"
 	"github.com/citradigital/cinemas/internal/scheduling"
 	"github.com/citradigital/cinemas/internal/seatinventory"
+	"github.com/citradigital/cinemas/internal/tickets"
 	"github.com/labstack/echo/v4"
 )
 
@@ -1353,5 +1354,33 @@ func TestServerCreatesPendingIntentAndAcceptsVerifiedWebhook(t *testing.T) {
 	}
 	if order, ok := paymentRepository.Order("10000000-0000-4000-8000-000000000001"); !ok || order.Status != payments.OrderPaid {
 		t.Fatalf("order after webhook = %#v, want paid", order)
+	}
+}
+
+func TestServerReturnsTicketsOnlyToTheirOwner(t *testing.T) {
+	now := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	bookingService := booking.NewService(booking.NewMemoryRepository(nil), 10*time.Minute, func() time.Time { return now })
+	authenticationService := auth.NewService(auth.NewMemoryRepository(), []byte("01234567890123456789012345678901"), time.Hour, func() time.Time { return now })
+	owner, err := authenticationService.Register(context.Background(), auth.RegisterInput{Email: "ticket-owner@example.com", Password: "correct horse battery staple", DisplayName: "Ticket Owner"})
+	if err != nil {
+		t.Fatalf("register owner: %v", err)
+	}
+	other, err := authenticationService.Register(context.Background(), auth.RegisterInput{Email: "ticket-other@example.com", Password: "correct horse battery staple", DisplayName: "Other Customer"})
+	if err != nil {
+		t.Fatalf("register other: %v", err)
+	}
+	ticketService := tickets.NewService(tickets.NewMemoryRepository([]tickets.Ticket{{
+		ID: "ticket-1", OrderID: "10000000-0000-4000-8000-000000000001", UserID: owner.User.ID, Code: "TKT-opaque", QRToken: "TKT-opaque", Status: tickets.TicketIssued,
+	}}), nil, func() time.Time { return now }, time.Minute)
+	server := NewServerWithAllFeatures(bookingService, nil, nil, nil, nil, authenticationService, "bootstrap-token")
+	server.EnableTicketRoutes(authenticationService, ticketService)
+
+	ownerRequest := serveAdminCinemaRequest(server, http.MethodGet, "/v1/orders/10000000-0000-4000-8000-000000000001/tickets", "", owner.AccessToken)
+	if ownerRequest.Code != http.StatusOK || !bytes.Contains(ownerRequest.Body.Bytes(), []byte(`"qr_token":"TKT-opaque"`)) || bytes.Contains(ownerRequest.Body.Bytes(), []byte("hash")) {
+		t.Fatalf("owner response status/body = %d/%s", ownerRequest.Code, ownerRequest.Body.String())
+	}
+	otherRequest := serveAdminCinemaRequest(server, http.MethodGet, "/v1/orders/10000000-0000-4000-8000-000000000001/tickets", "", other.AccessToken)
+	if otherRequest.Code != http.StatusNotFound {
+		t.Fatalf("foreign response status = %d, want %d", otherRequest.Code, http.StatusNotFound)
 	}
 }

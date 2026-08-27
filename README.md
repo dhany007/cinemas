@@ -59,6 +59,8 @@ The versioned API contract is [openapi/openapi.yaml](openapi/openapi.yaml). Upda
 
 `POST /v1/orders/{orderId}/payment-intents` requires the customer's bearer token and creates a `PENDING` intent. It never marks an order paid. In local development, the deterministic `FAKE` adapter is enabled with `PAYMENT_PROVIDER=FAKE`; it is rejected when `APP_ENV=production`. A signed `POST /v1/webhooks/payments/FAKE` event is the only path that can mark the order paid, sell seats, issue tickets, and record the payment audit event. The webhook requires `X-Payment-Timestamp` and HMAC-SHA256 `X-Payment-Signature` over `<timestamp>.<raw-body>`, using `PAYMENT_WEBHOOK_SECRET`; events outside `PAYMENT_WEBHOOK_REPLAY_WINDOW` are rejected.
 
+`GET /v1/orders/{orderId}/tickets` requires the owner's bearer token and returns tickets only after the order is paid. Each ticket includes an opaque QR token but never the stored token hash. Payment finalization writes one `TICKET_DELIVERY_REQUESTED` outbox event in the same transaction; the local worker delivers it through a logging adapter and retries failures without logging addresses, ticket codes, QR tokens, or hashes.
+
 `POST /v1/orders` creates an atomic, ten-minute seat hold. It requires `Authorization: Bearer <access_token>`, an `Idempotency-Key` header, and a JSON body:
 
 ```json

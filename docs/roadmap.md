@@ -82,11 +82,11 @@ This checklist is the single delivery sequence for the cinema platform. A featur
 
 **Goal:** deliver usable tickets after a successful payment.
 
-- [ ] Add owner-only ticket retrieval for a paid order.
-- [ ] Generate opaque, non-guessable QR ticket tokens; never expose token hashes.
-- [ ] Add ticket delivery through the transactional outbox.
-- [ ] Implement retryable notification delivery and reconciliation for unprocessed events.
-- [ ] Add customer notification preferences only if a delivery channel requires them.
+- [x] Add owner-only ticket retrieval for a paid order.
+- [x] Generate opaque, non-guessable QR ticket tokens; never expose token hashes.
+- [x] Add ticket delivery through the transactional outbox.
+- [x] Implement retryable notification delivery and reconciliation for unprocessed events.
+- [x] Add customer notification preferences only if a delivery channel requires them. (No opt-in delivery channel is configured yet.)
 
 **Done when:** every paid order produces tickets exactly once, delivery is recoverable after failures, and ticket data is visible only to its owner or an admin.
 
